@@ -1,6 +1,6 @@
 {
   "openai": {
-    "api_key": "sk-743aa97add4740fb89e387f1c387b2c5",
+    "api_key": "sk-*********************",
     "base_url": "https://api.deepseek.com",
     "model": "deepseek-v4-flash",
     "temperature": 0.7,
