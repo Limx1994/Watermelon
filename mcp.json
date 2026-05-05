@@ -4,7 +4,7 @@
       "type": "streamable_http",
       "url": "https://mcp.api-inference.modelscope.net/ec29937d00914d/mcp",
       "headers": {
-        "Authorization": "Bearer ms-c33a8d55-f244-4a2e-99ed-f74c77f02424"
+        "Authorization": "Bearer ms-**************"
       }
     },
     "sequential-thinking": {
