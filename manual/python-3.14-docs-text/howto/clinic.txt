@@ -1,6 +1,0 @@
-Argument Clinic 的用法
-**********************
-
-备注:
-
-  Argument Clinic 指南已被移至 Python Developer's Guide。
