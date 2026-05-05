@@ -1,0 +1,328 @@
+7. 在 iOS 上使用 Python
+***********************
+
+作者:
+   Russell Keith-Magee (2024-03)
+
+在 iOS 上的 Python 不同于桌面平台上的 Python。 在桌面平台上，Python 通
+常是作为系统资源安装并可供该计算机上的任何用户使用。 用户将通过运行
+**python** 可执行文件并在交互提示符下输入命令，或者通过运行 Python 脚
+本的方式与 Python 进行交互。
+
+在 iOS，不存在作为系统资源安装的这种概念。 唯一的软件分发单元是 "app"
+。 也不存在可以让你运行 **python** 可执行文件，或与 Python REPL 进行交
+互的控制台。
+
+因此，你在 iOS 上使用 Python 的唯一方式是嵌入模式 —— 也就是说，通过编
+写原生的 iOS 应用，并使用 "libPython" 嵌入一个 Python 解释器，然后使用
+Python 嵌入式 API 来唤起 Python 代码。 完整的 Python 解释器、标准库，
+以及所有 Python 代码都将被打包为可通过 iOS App Store 发布的独立软件包
+。
+
+如果你想要上手尝试以 Python 来编写 iOS app，像 BeeWare 和 Kivy 这样的
+项目将提供更方便的用户体验。 这些项目能够管理支持 iOS 项目运行的相关复
+杂问题，这样你只需要处理 Python 代码本身。
+
+
+7.1. iOS 上的 Python 运行时
+===========================
+
+
+7.1.1. iOS 版本兼容性
+---------------------
+
+受支持的最低 iOS 版本是在编译时指定的，对 "configure" 使用 "--host" 选
+项。 在默认情况下，当针对 iOS 编译时，Python 编译将设置受支持的最低
+iOS 版本为 13.0。 要使用不同的最低 iOS 版本，请将版本号作为 "--host"
+参数的一部分提供 —— 例如，"--host=arm64-apple-ios15.4-simulator" 将编
+译一份部署目标为 15.4 的 ARM64 模拟器构建版。
+
+
+7.1.2. 平台识别
+---------------
+
+当在 iOS 上执行时，"sys.platform" 将报告为 "ios"。 无论 app 是在模拟器
+还是物理设备上运行，都将在 iPhone 或 iPad 上返回该值。
+
+有关特定运行时环境的信息，包括 iOS 版本、设备型号以及设备是否为模拟器
+，可使用 "platform.ios_ver()" 来获取。 "platform.system()" 将根据具体
+设备报告为 "iOS" 或 "iPadOS"。
+
+"os.uname()" 报告内核等级的详情；它将报告系统名称 "Darwin"。
+
+
+7.1.3. 标准库可用性
+-------------------
+
+Python 标准库在 iOS 上有一些需要注意的缺失和限制。 请参阅 针对 iOS 的
+API 可用性指南 了解详情。
+
+
+7.1.4. 二进制扩展模块
+---------------------
+
+作为一个平台的 iOS 与别家的显著不同之处在于 App Store 分发机制对应用的
+打包方式设置了硬性要求。其中一项要求规定了应当如何分发二进制扩展模块。
+
+iOS App Store 要求 iOS app 中的 *所有* 二进制模块都必须为动态库，包含
+在具有适当元数据的框架中，保存于被打包 app 的 "Frameworks" 文件夹下。
+每个框架只能有一个二进制模块，而在 "Frameworks" 文件夹之外不能有可执行
+的二进制文件。
+
+这与 Python 通常用于发布二进制文件的方式存在冲突，此方式允许从
+"sys.path" 上的任何位置加载二进制扩展模块。 为确保符合 App Store 的政
+策，iOS 项目必须对任何 Python 包进行后期处理，将 ".so" 二进制模块转换
+为具有适当元数据和签名的单个独立框架。 有关如何执行后期处理的更多细节
+，请参阅 将 Python 添加到你的项目 指南。
+
+为帮助 Python 在新位置中发现二进制文件，在 "sys.path" 中的原始 ".so"
+文件将替换为 ".fwork" 文件。 此文件是一个包含框架二进制文件相对于 app
+捆绑包位置的文本文件。 为允许框架将其解析回原始位置，框架必须包含一个
+".origin" 文件，其中包含 ".fwork" 相对于 app 捆绑包的位置。
+
+例如，考虑导入 "from foo.bar import _whiz" 的情况，其中 "_whiz" 是使用
+二进制模块 "sources/foo/bar/_whiz.abi3.so" 实现的，这里 "sources" 是在
+"sys.path" 中注册的相对于 app 包的位置。 此模块 *必须* 发布为
+"Frameworks/foo.bar._whiz.framework/foo.bar._whiz" (根据模块的完整导入
+路径创建框架名称)，并通过 ".framework" 目录中的 "Info.plist" 文件将二
+进制文件标识为一个框架。 "foo.bar._whiz" 模块在原始位置中以一个
+"sources/foo/bar/_whiz.abi3.fwork" 标记文件来代表，其中包含路径
+"Frameworks/foo.bar._whiz/foo.bar._whiz"。 该框架还要包含
+"Frameworks/foo.bar._whiz.framework/foo.bar._whiz.origin"，其中包含
+".fwork" 文件的路径。
+
+当在 iOS 上运行时，Python 解释器将安装一个能够读取并导入 ".fwork" 文件
+的 "AppleFrameworkLoader"。 一旦被导入，该二进制模块的 "__file__" 属性
+将报告为 ".fwork" 文件的位置。 不过，被加载模块的 "ModuleSpec" 则会将
+"origin" 报告为框架文件夹下的二进制文件的位置。
+
+
+7.1.5. 编译器存根二进制文件
+---------------------------
+
+Xcode 不会暴露针对 iOS 的显式编译器；作为替代，它会使用一个能解析出完
+整编译器路径的 "xcrun" 脚本 (例如，"xcrun --sdk iphoneos clang" 将获得
+针对 iPhone 设备的 "clang")。 不过，使用此脚本会导致两个问题：
+
+* "xcrun" 的输出包括特定机器专属的路径，这导致无法在用户之间共享
+  sysconfig 模块；并且
+
+* 它会导致包括空格的 "CC"/"CPP"/"LD"/"AR" 定义。 有大量 C 生态系统工具
+  假定你可以在第一个空格处拆分命令行来获取编译器可执行文件的路径；当使
+  用 "xcrun" 这是不行的。
+
+为避免这些问题，Python 提供了针对这些工具的存根。 这些存根是在下层
+"xcrun" 工具之上的 shell 脚本包装器，发布在随同已编译的 iOS 框架一起分
+发的 "bin" 文件夹中。 这些脚本可以被重新调整位置，并且总是会解析到正确
+的本机系统路径。 通过在配合框架的 bin 文件夹中包括这些脚本，
+"sysconfig" 模块的内容将可适用于要编译他们自己的模块的最终用户。 在为
+iOS 编译第三方 Python 模块时，你应当确保这些存根二进制文件位于你的路径
+中。
+
+
+7.2. 在 iOS 上安装 Python
+=========================
+
+
+7.2.1. 构建 iOS 应用程序的工具
+------------------------------
+
+针对 iOS 构建需要使用 Apple 的 Xcode 工具集。 强烈建议你使用 Xcode 最
+新稳定发布版。 这将需要使用最新（或者次新）发布的 macOS 版本，因为
+Apple 不会为更旧的 macOS 版本维护 Xcode。 Xcode 命令行工具对于 iOS 开
+发来说是不够的；你需要 *完整的* Xcode 安装版。
+
+如果你想要在 iOS 模拟器上运行你的代码，你还需要安装 iOS 模拟器平台。
+当你首次运行 Xcode 应该会提示你选择一个 iOS 模拟器平台。 或者，你也可
+以通过在 Settings 面板的 Platforms 选项卡中添加一个 iOS 模拟器平台。
+
+
+7.2.2. 在 iOS 项目中添加 Python
+-------------------------------
+
+Python 可以被添加到任何 iOS 项目，不论它是使用 Swift 还是 Objective C
+。 下面的例子将使用 Objective C；如果你是使用 Swift，你可能会发现
+PythonKit 这样的库非常有用。
+
+要在 iOS Xcode 项目中添加 Python：
+
+1. 构建或是获取一个 Python "XCFramework"。 请参阅 Apple/iOS/README.md
+   (在 CPython 源代码发布包中) 中的说明了解有关如何构建 Python
+   "XCFramework" 的细节。 作为最低要求，你需要一个支持 "arm64-apple-
+   ios"，再加上 "arm64-apple-ios-simulator" 或 "x86_64-apple-ios-
+   simulator" 的构建版。
+
+2. 将 "XCframework" 拖到你的 iOS 项目中。 在下面的说明中，我们将假定你
+   已将 "XCframework" 放到你的项目的根目录下；不过，你也可以通过按需调
+   整路径来使用任何其他你想要的位置。
+
+3. 将你的应用程序代码作为一个文件夹添加到你的 Xcode 项目中。 在下面的
+   说明中，我们将假定你的用户代码位于你的项目中名为 "app" 的文件夹；你
+   也可以通过按需调整路径来使用任何其他位置。 请确保该文件夹已关联到你
+   的 app 目标。
+
+4. 通过选择你的 Xcode 项目的根节点来选择 app 目标，然后在边栏中出现的
+   目标名称进行选择。
+
+5. 在 "General" 设置中，在 "Frameworks, Libraries and Embedded
+   Content" 之下，添加 "Python.xcframework"，并选中 "Embed & Sign"。
+
+6. 在"构建设置"选项卡中，修改以下内容：
+
+   * 构建选项
+
+     * 用户脚本沙盒：否
+
+     * 启用可测试性：是
+
+   * 搜索路径
+
+     * 框架搜索路径： "$(PROJECT_DIR)"
+
+     * 头文件搜索路径：
+       ""$(BUILT_PRODUCTS_DIR)/Python.framework/Headers""
+
+   * Apple Clang - 警告 - 所有语言
+
+     * 引用包含在框架头文件中：否
+
+7. 添加一个处理 Python 标准库和你自己的 Python 二进制依赖的构建步骤。
+   在 "Build Phases" 选项卡中，在 "Embed Frameworks" 步骤 *之前*，
+   "Copy Bundle Resources" 步骤 *之后* 添加一个新的 "Run Script" 构建
+   步骤。 将该步骤命名为 "Process Python libraries"，取消 "Based on
+   dependency analysis" 复选框，并将脚本内容设为：
+
+      set -e
+      source $PROJECT_DIR/Python.xcframework/build/build_utils.sh
+      install_python Python.xcframework app
+
+   如果你把你的 XCframework 放在你的项目根目录以外的某处，则修改第一个
+   参数对应的路径。
+
+8. 添加 Objective C 代码来初始化并使用嵌入模式的 Python 解释器。 你应
+   当确保：
+
+   * UTF-8 模式 ("PyPreConfig.utf8_mode") *已启用*;
+
+   * 带缓冲的 stdio ("PyConfig.buffered_stdio") *已禁用*;
+
+   * 写入字节码 ("PyConfig.write_bytecode") *已禁用*;
+
+   * 信号处理器 ("PyConfig.install_signal_handlers") *已启用*;
+
+   * 系统日志记录 ("PyConfig.use_system_logger") *已启用* (可选项，但
+     强烈建议启用；默认是启用的);
+
+   * 用于解释器的 "PYTHONHOME" 将被配置为指向你的 app 捆绑包的
+     "python" 子文件夹；并且
+
+   * 用于解释器的 "PYTHONPATH" 包括：
+
+     * 你的 app 的封包的 "python/lib/python3.X" 子文件夹，
+
+     * 你的 app 的封包的 "python/lib/python3.X/lib-dynload" 子文件夹，
+       以及
+
+     * 你的 app 的封包的 "app" 子文件夹
+
+   你的 app 捆绑包的位置可使用 "[[NSBundle mainBundle] resourcePath]"
+   来确定。
+
+这些说明的步骤 7 和 8 均假定你有一个单独的纯 Python 应用程序代码文件夹
+，其名称为 "app"。 如果你的 app 中还有第三方二进制模块，则还需要一些额
+外的步骤：
+
+* 你需要确保任何包含第三方二进制文件的文件夹均已关联到 app 目标，或是
+  已作为第 7 步的一部分被显式地拷贝。 第 7 步还应当清理任何对于特定构
+  建目标的平台来说不适用的二进制文件（即当你要构建以该模拟器为目标的
+  app 就应删除任何设备二进制文件）。
+
+* 如果你为第三方包使用了单独的文件夹，请确保该文件夹已在第 7 步添加到
+  对 "install_python" 的调用结束的位置，并被作为第 8 步中 "PYTHONPATH"
+  配置的一部分。
+
+* 如果有任何包含第三方包的文件夹包含了 ".pth" 文件，你应当将该文件夹添
+  加为 *site 目录* (使用 "site.addsitedir()")，而不是直接添加到
+  "PYTHONPATH" 或 "sys.path"。
+
+
+7.2.3. 测试 Python 软件包
+-------------------------
+
+CPython 源码树包含一个 testbed 项目 用于在 iOS 模拟器上运行 CPython 测
+试套件。 这个 testbed 还可被用作在 iOS 上运行你的 Python 库的测试套件
+的 testbed 项目。
+
+在构建或获取 iOS XCFramework (请参阅 Apple/iOS/README.md 了解详情) 之
+后，创建一个 Python iOS testbed 项目的克隆。 如果你使用了 "Apple" 构建
+脚本来构建 XCframework，你可以运行：
+
+   $ python cross-build/iOS/testbed clone --app <path/to/module1> --app <path/to/module2> app-testbed
+
+或者，如果你引入了你自己的 XCframework，通过运行：
+
+   $ python Apple/testbed clone --platform iOS --framework <path/to/Python.xcframework> --app <path/to/module1> --app <path/to/module2> app-testbed
+
+任何使用 "--app" 旗标指定的文件夹都将被拷贝到克隆的 testbed 项目中。
+结果 testbed 将在 "app-testbed" 文件夹中被创建。 在本示例中，"module1"
+和 "module2" 将成为运行时可导入的模块。 如果你的项目还有额外的依赖项，
+它们可以被安装到 "app-testbed/Testbed/app_packages" 文件夹中（使用
+"pip install --target app-testbed/Testbed/app_packages" 或类似的命令）
+。
+
+你可以随后使用 "app-testbed" 文件夹来运行你的 app 的测试套件，举例来说
+，如果 "module1.tests" 是你的测试套件的入口点，你可以运行：
+
+   $ python app-testbed run -- module1.tests
+
+这相当于在桌面 Python 构建版上运行 "python -m module1.tests"。 任何在
+"--" 之后的参数都将被传给 testbed 就像它们是桌面机上 "python -m" 的参
+数那样。
+
+你还可以通过运行以下命令在 Xcode 中打开这个 testbed 项目：
+
+   $ open app-testbed/iOSTestbed.xcodeproj
+
+这将允许你使用完整的 Xcode 工具套件进行调试。
+
+用于运行测试套件的参数是在测试计划中定义的。要修改测试计划，请选择项目
+树中的测试计划节点（它应该是根节点的第一个子节点），然后选择"配置"选项
+卡。修改"启动时传递的参数"值即可更改测试参数。
+
+该测试计划还会禁用并行测试，并指定使用 "Testbed.lldbinit" 文件来提供调
+试器配置。 默认的调试器配置会禁用在 "SIGINT", "SIGUSR1", "SIGUSR2" 和
+"SIGXFSZ" 信号上的自动断点。
+
+
+7.3. App Store 合规性
+=====================
+
+将 app 发布到第三方 iOS 设备的唯一机制是将 app 提交到 iOS App Store；
+提交发布的 app 必须通过 Apple 的 app 审核进程。 此进程包括一组在所提交
+的应用程序包中自动检查有问题代码的验证规则。 有一些步骤必须被执行以确
+保你的 app 能够通过这些验证步骤。
+
+
+7.3.1. 标准库中的不兼容代码
+---------------------------
+
+Python 标准库包含了一些已知会违反这些自动规则的代码。 虽然这些违规情况
+看来是属于误报，但 Apple 的审核规则是不可挑战的；因此，有必要修改
+Python 标准库以便 app 能够通过 App Store 的审核。
+
+Python 源代码树包含 一个补丁文件 可移除所有已知的会导致 App Store 审核
+过程出现问题的代码。 这个补丁会在针对 iOS 进行构建时自动应用。
+
+
+7.3.2. 隐私声明
+---------------
+
+在 2025 年 4 月，Apple 引入了 特定第三方库提供隐私声明 的要求。 因此，
+如果你有使用了某个受影响库的二进制模块，你必须针对该库提供一个
+".xcprivacy" 文件。 OpenSSL 就是受此要求影响的库，但还有其他的库也是如
+此。
+
+如果你制作了一个名为 "mymodule.so" 的二进制模块，并且使用了上述第 7 步
+中描述的 Xcode 构建脚本，你可以将一个 "mymodule.xcprivacy" 文件与
+"mymodule.so" 放在一起，这个隐私声明将在该二进制模块转换为框架时被安装
+到要求的位置。

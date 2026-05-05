@@ -1,0 +1,128 @@
+File objects
+************
+
+这些 API 是对内置文件对象的 Python 2 C API 的最小化模拟，它过去依赖于
+C 标准库的带缓冲 I/O (FILE*) 支持。在 Python 3 中，文件和流使用新的
+"io" 模块，它在操作系统的低层级无缓冲 I/O 之上定义了几个层。下面介绍的
+函数是针对这些新 API 的便捷 C 包装器，主要用于解释器的内部错误报告；建
+议第三方代码改为访问 "io" API 接口。
+
+PyObject *PyFile_FromFd(int fd, const char *name, const char *mode, int buffering, const char *encoding, const char *errors, const char *newline, int closefd)
+    *返回值：新的引用。** 属于 稳定 ABI.*
+
+   根据已打开文件 *fd* 的文件描述符创建一个 Python 文件对象。参数
+   *name*, *encoding*, *errors* 和 *newline* 可以为 "NULL" 表示使用默
+   认值；*buffering* 可以为 *-1* 表示使用默认值。 *name* 会被忽略仅保
+   留用于向下兼容。失败时返回 "NULL"。有关参数的更全面描述，请参阅
+   "io.open()" 函数的文档。
+
+   警告:
+
+     由于 Python 流具有自己的缓冲层，因此将它们与 OS 级文件描述符混合
+     会产生各种问题（例如数据的意外排序）。
+
+   在 3.2 版本发生变更: 忽略 *name* 属性。
+
+int PyObject_AsFileDescriptor(PyObject *p)
+    * 属于 稳定 ABI.*
+
+   将与 *p* 关联的文件描述符作为 int 返回。如果对象是整数，则返回其值
+   。如果不是，则如果对象存在 "fileno()" 方法则调用该方法；该方法必须
+   返回一个整数，它将作为文件描述符的值返回。失败时将设置异常并返回
+   "-1"。
+
+PyObject *PyFile_GetLine(PyObject *p, int n)
+    *返回值：新的引用。** 属于 稳定 ABI.*
+
+   等价于 "p.readline([n])"，这个函数从对象 *p* 中读取一行。 *p* 可以
+   是文件对象或具有 "readline()" 方法的任何对象。如果 *n* 是 "0"，则无
+   论该行的长度如何，都会读取一行。如果 *n* 大于 "0"，则从文件中读取不
+   超过 *n* 个字节；可以返回行的一部分。在这两种情况下，如果立即到达文
+   件末尾，则返回空字符串。但是，如果 *n* 小于 "0"，则无论长度如何都会
+   读取一行，但是如果立即到达文件末尾，则引发 "EOFError"。
+
+int PyFile_SetOpenCodeHook(Py_OpenCodeHookFunction handler)
+
+   重写 "io.open_code()" 的正常行为，将其形参通过所提供的处理程序来传
+   递。
+
+   *handler* 函数的类型为：
+
+   typedef PyObject *(*Py_OpenCodeHookFunction)(PyObject*, void*)
+
+      等价于 PyObject *(*)(PyObject *path, void *userData)，其中
+      *path* 会确保为 "PyUnicodeObject" 类型对象。
+
+   *userData* 指针会被传入钩子函数。由于钩子函数可能由不同的运行时调用
+   ，该指针不应直接指向 Python 状态。
+
+   鉴于这个钩子是在导入期间有意使用的，请避免在其执行期间导入新模块，
+   除非已知它们为冻结状态或者是在 "sys.modules" 中可用。
+
+   一旦钩子被设定，它就不能被移除或替换，之后对
+   "PyFile_SetOpenCodeHook()" 的调用也将失败，如果解释器已经被初始化，
+   函数将返回 -1 并设置一个异常。
+
+   此函数可以安全地在 "Py_Initialize()" 之前调用。
+
+   引发一个不带参数的 审计事件 "setopencodehook"。
+
+   Added in version 3.8.
+
+PyObject *PyFile_OpenCodeObject(PyObject *path)
+
+   使用 "'rb'" 模式打开 *path*。 *path* 必须是一个 Python "str" 对象。
+   此函数的行为可能被 "PyFile_SetOpenCodeHook()" 重写以允许对文本进行
+   某些预处理。
+
+   这对应于 Python 中的 "io.open_code()"。
+
+   成功时，此函数将返回一个指向 Python 文件对象的 *strong reference*。
+   失败时，此函数将返回 "NULL" 并设置一个异常。
+
+   Added in version 3.8.
+
+PyObject *PyFile_OpenCode(const char *path)
+
+   类似于 "PyFile_OpenCodeObject()"，但 *path* 是一个 UTF-8 编码的
+   const char* 字符串。
+
+   Added in version 3.8.
+
+int PyFile_WriteObject(PyObject *obj, PyObject *p, int flags)
+    * 属于 稳定 ABI.*
+
+   Write object *obj* to file object *p*.  The only supported flag for
+   *flags* is "Py_PRINT_RAW"; if given, the "str()" of the object is
+   written instead of the "repr()".
+
+   If *obj* is "NULL", write the string ""<NULL>"".
+
+   Return "0" on success or "-1" on failure; the appropriate exception
+   will be set.
+
+int PyFile_WriteString(const char *s, PyObject *p)
+    * 属于 稳定 ABI.*
+
+   将字符串 *s* 写入文件对象 *p*。成功返回 "0" 失败返回 "-1"；将设定相
+   应的异常。
+
+
+Soft-deprecated API
+===================
+
+自 3.15 版起已处于 Soft deprecated 状态.
+
+These are APIs that were included in Python's C API by mistake. They
+are documented solely for completeness; use other "PyFile*" APIs
+instead.
+
+PyObject *PyFile_NewStdPrinter(int fd)
+
+   请改用 "PyFile_FromFd()" 并保持默认值 ("fd, NULL, "w", -1, NULL,
+   NULL, NULL, 0")。
+
+PyTypeObject PyStdPrinter_Type
+
+   在 Python 启动期间当 "io" 尚不可用时内部使用的文件型对象的类型。请
+   改用 Python "open()" 或 "PyFile_FromFd()" 来创建文件对象。

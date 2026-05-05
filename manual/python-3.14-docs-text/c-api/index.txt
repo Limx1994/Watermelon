@@ -1,0 +1,268 @@
+Python/C API 参考手册
+*********************
+
+本手册描述了希望编写扩展模块或嵌入 Python 的 C 和 C++ 程序员可用的 API
+。它是 扩展和嵌入 Python 解释器 的配套文档，后者描述了扩展编写的一般原
+则，但没有详细描述 API 函数。
+
+* 概述
+
+  * 语言版本兼容性
+
+  * 代码标准
+
+  * 包含文件
+
+  * 有用的宏
+
+  * 对象、类型和引用计数
+
+  * 异常
+
+  * 嵌入 Python
+
+  * 调试构建
+
+  * 推荐的第三方工具
+
+* C API 的稳定性
+
+  * 不稳定 C API
+
+  * 应用程序二进制接口的稳定版
+
+  * 平台的考虑
+
+  * 受限 API 的内容
+
+* 极高层级 API
+
+  * 可用的起始符号
+
+  * 栈影响
+
+* 引用计数
+
+* 异常处理
+
+  * 打印和清理
+
+  * 抛出异常
+
+  * 发出警告
+
+  * 查询错误指示器
+
+  * 信号处理
+
+  * Exception 类
+
+  * 异常对象
+
+  * Unicode 异常对象
+
+  * 递归控制
+
+  * 异常与警告类型
+
+  * 回溯
+
+* 定义扩展模块
+
+  * 多个模块实例
+
+  * 初始化函数
+
+  * 多阶段初始化
+
+  * 旧式的单阶段初始化
+
+* 工具
+
+  * 操作系统实用工具
+
+  * 系统功能
+
+  * 进程控制
+
+  * 导入模块
+
+  * 数据 marshal 操作支持
+
+  * 解析参数并构建值变量
+
+  * 字符串转换与格式化
+
+  * 字符分类与转换
+
+  * PyHash API
+
+  * 反射
+
+  * 编解码器注册与支持功能
+
+  * PyTime C API
+
+  * 对 Perf Maps 的支持
+
+* 抽象对象层
+
+  * 对象协议
+
+  * 调用协议
+
+  * 数字协议
+
+  * 序列协议
+
+  * 映射协议
+
+  * 迭代器协议
+
+  * 缓冲协议
+
+* 具体的对象层
+
+  * 基本对象
+
+  * 数值对象
+
+  * 序列对象
+
+  * 容器对象
+
+  * 函数对象
+
+  * 其他对象
+
+  * 针对扩展模块的 C API
+
+* Interpreter initialization and finalization
+
+  * Before Python initialization
+
+  * Global configuration variables
+
+  * Initializing and finalizing the interpreter
+
+  * Cautions regarding runtime finalization
+
+  * Process-wide parameters
+
+* Thread states and the global interpreter lock
+
+  * Detaching the thread state from extension code
+
+  * Non-Python created threads
+
+  * Legacy API
+
+  * Cautions about fork()
+
+  * High-level APIs
+
+  * GIL-state APIs
+
+  * Low-level APIs
+
+* Asynchronous notifications
+
+* Operating system thread APIs
+
+* Synchronization primitives
+
+  * Python critical section API
+
+  * Legacy locking APIs
+
+* Thread-local storage support
+
+  * Thread-specific storage API
+
+  * Dynamic allocation
+
+  * Methods
+
+  * Legacy APIs
+
+* Multiple interpreters in a Python process
+
+  * A per-interpreter GIL
+
+  * Bugs and caveats
+
+  * High-level APIs
+
+  * Low-level APIs
+
+  * Advanced debugger support
+
+* Profiling and tracing
+
+* Reference tracing
+
+* Python 初始化配置
+
+  * PyInitConfig C API
+
+  * 配置选项
+
+  * 运行时 Python 配置 API
+
+  * PyConfig C API
+
+  * Py_GetArgcArgv()
+
+  * 延迟主模块的执行
+
+* 内存管理
+
+  * 概述
+
+  * 分配器域
+
+  * 原始内存接口
+
+  * 内存接口
+
+  * 对象分配器
+
+  * 默认内存分配器
+
+  * 自定义内存分配器
+
+  * Python 内存分配器的调试钩子
+
+  * pymalloc 分配器
+
+  * mimalloc 分配器
+
+  * tracemalloc C API
+
+  * 例子
+
+* 对象实现支持
+
+  * Allocating objects on the heap
+
+  * 对象生命周期
+
+  * 公用对象结构体
+
+  * 类型对象结构体
+
+  * 使对象类型支持循环垃圾回收
+
+* API 和 ABI 版本管理
+
+  * 构建时版本常量
+
+  * 运行时版本
+
+  * 比特位打包宏
+
+* 监控 C API
+
+* 生成执行事件
+
+  * 管理监控状态

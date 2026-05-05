@@ -1,0 +1,671 @@
+"traceback" --- 打印或读取栈回溯信息
+************************************
+
+**源代码：** Lib/traceback.py
+
+======================================================================
+
+本模块提供了提取、格式化和打印 Python 程序的栈回溯信息的标准接口。 它
+比解释器默认的回溯显示更灵活，因而使得配置输出的特定部分成为可能。 最
+后，它还包含用于捕获有关异常的足够信息以供稍后打印的工具，而无需保存对
+实际异常的引用。 由于异常可作为大型对象图的根对象，此工具能够显著地提
+升内存管理效率。
+
+本模块使用 回溯对象 --- 它们是类型为 "types.TracebackType" 的对象，它
+们将被赋值给 "BaseException" 实例的 "__traceback__" 字段。
+
+参见:
+
+  模块 "faulthandler"
+     用于在发生错误、超时或用户信号时显式地转储 Python 回溯信息。
+
+  模块 "pdb"
+     用于 Python 程序的交互式源代码调试器。
+
+本模块的 API 可分为两部分：
+
+* 提供基本功能的模块级函数，对于异常和回溯的交互式检查来说很有用处。
+
+* "TracebackException" 类及其辅助类 "StackSummary" 和 "FrameSummary"。
+  这些类提供了生成输出的更大灵活性和存储稍后进行格式化所需信息的能力而
+  无需持有对实际异常和回溯对象的引用。
+
+Added in version 3.13: 输出在默认情况下是彩色的并且可以 使用环境变量控
+制。
+
+
+模块级函数
+==========
+
+traceback.print_tb(tb, limit=None, file=None)
+
+   如果 *limit* 为正值则打印来自 回溯对象 *tb* 的至多 *limit* 个栈回溯
+   条目（从调用方的帧开始）。 否则，打印最后 "abs(limit)" 个条目。 如
+   果 *limit* 被省略或为 "None"，则打印所有条目。 如果 *file* 被省略或
+   为 "None"，则会输出到 "sys.stderr"；在其他情况下它应当是一个打开的
+   *文件* 或 *file-like object* 用来接受输出。
+
+   备注:
+
+     *limit* 形参的含义不同于 "sys.tracebacklimit" 的含义。 负的
+     *limit* 值对应于正的 "sys.tracebacklimit" 值，而正的 *limit* 值的
+     行为无法用 "sys.tracebacklimit" 来达成。
+
+   在 3.5 版本发生变更: 添加了对负数值 *limit* 的支持
+
+traceback.print_exception(exc, /, [value, tb, ]limit=None, file=None, chain=True)
+
+   将来自 回溯对象 *tb* 的异常信息与栈跟踪条目打印到 *file*。 这与
+   "print_tb()" 相比有以下几方面的区别：
+
+   * 如果 *tb* 不为 "None"，它将打印头部 "Traceback (most recent call
+     last):"
+
+   * 它将在栈回溯之后打印异常类型和 *value*
+
+   * 如果 *type(value)* 为 "SyntaxError" 且 *value* 具有适当的格式，它
+     会打印发生语法错误的行并用一个脱字符来指明错误的大致位置。
+
+   从 Python 3.10 开始，可以不再传递 *value* 和 *tb*，而是传递一个异常
+   对象作为第一个参数。 如果提供了 *value* 和 *tb*，则第一个参数会被忽
+   略以便提供向后兼容性。
+
+   可选的 *limit* 参数的含义与 "print_tb()" 的相同。 如果 *chain* 为真
+   值（默认），则链式异常（异常的 "__cause__" 或 "__context__" 属性）
+   也将被打印出来，就像解释器本身在打印未处理的异常时一样。
+
+   在 3.5 版本发生变更: *etype* 参数会被忽略并根据 *value* 推断出来。
+
+   在 3.10 版本发生变更: *etype* 形参已被重命名为 *exc* 并且现在是仅限
+   位置形参。
+
+traceback.print_exc(limit=None, file=None, chain=True)
+
+   这是 "print_exception(sys.exception(), limit=limit, file=file,
+   chain=chain)" 的快捷方式。
+
+traceback.print_last(limit=None, file=None, chain=True)
+
+   这是 "print_exception(sys.last_exc, limit=limit, file=file,
+   chain=chain)" 的快捷方式。 通常它将只在异常到达交互提示符之后才会起
+   作用 (参见 "sys.last_exc")。
+
+traceback.print_stack(f=None, limit=None, file=None)
+
+   如果 *limit* 为正数则打印至多 *limit* 个栈跟踪条目（从唤起点开始）
+   。 在其他情况下，则打印最后 "abs(limit)" 个条目。 如果 *limit* 被省
+   略或为 "None"，则会打印所有条目。 可选的 *f* 参数可被用来指定一个替
+   代 栈帧 作为开始位置。 可选的 *file* 参数的含义与 "print_tb()" 的相
+   同。
+
+   在 3.5 版本发生变更: 添加了对负数值 *limit* 的支持
+
+traceback.extract_tb(tb, limit=None)
+
+   返回一个 "StackSummary" 对象来代表从 回溯对象 *tb* 提取的“预处理”栈
+   跟踪条目列表。 它可用作栈跟踪的另一种格式化形式。 可选的 *limit* 参
+   数的含义与 "print_tb()" 的相同。 “预处理”栈跟踪条目是一个
+   "FrameSummary" 对象，其中包含代表通常针对栈跟踪打印的信息的
+   "filename", "lineno", "name" 和 "line" 等属性。
+
+traceback.extract_stack(f=None, limit=None)
+
+   从当前的 栈帧 提取原始回溯。 返回值的格式与 "extract_tb()" 的相同。
+   可选的 *f* 和 *limit* 参数的含义与 "print_stack()" 的相同。
+
+traceback.print_list(extracted_list, file=None)
+
+   将 "extract_tb()" 或 "extract_stack()" 返回的元组列表以带格式的栈回
+   溯形式打印到给定的文件。 如果 *file* 为 "None"，则输出将被写到
+   "sys.stderr"。
+
+traceback.format_list(extracted_list)
+
+   给定一个由元组或如 "extract_tb()" 或 "extract_stack()" 所返回的
+   "FrameSummary" 对象组成的列表，返回一个可打印的字符串列表。 结果列
+   表中的每个字符串都对应于参数列表中具有相同索引号的条目。 每个字符串
+   以一个换行符结束；对于那些源文本行不为 "None" 的条目，字符串也可能
+   包含内部换行符。
+
+traceback.format_exception_only(exc, /, [value, ]*, show_group=False)
+
+   使用 "sys.last_value" 等给出的异常值来格式化回溯的异常部分。 返回值
+   是一个字符串列表，其中每一项都以换行符结束。 该列表包含异常消息，它
+   通常是一个字符串；但是，对于 "SyntaxError" 异常，它将包含多行并且（
+   当打印时）会显示语法错误发生位置的详细信息。 在异常消息之后，该列表
+   还包含了异常的 "注释"。
+
+   从 Python 3.10 开始，可以不传入 *value*，而是传入一个异常对象作为第
+   一个参数。 如果提供了 *value*，则第一个参数将被忽略以便提供向后兼容
+   性。
+
+   当 *show_group* 为 "True"，并且异常为 "BaseExceptionGroup" 的实例时
+   ，还会递归地包括嵌套的异常，并根据它们的嵌套深度添加缩进。
+
+   在 3.10 版本发生变更: *etype* 形参已被重命名为 *exc* 并且现在是仅限
+   位置形参。
+
+   在 3.11 版本发生变更: 返回的列表现在将包括关联到异常的任何 "注释"。
+
+   在 3.13 版本发生变更: 增加了 *show_group* 形参。
+
+traceback.format_exception(exc, /, [value, tb, ]limit=None, chain=True)
+
+   格式化一个栈跟踪和异常信息。 参数的含义与传给 "print_exception()"
+   的相应参数相同。 返回值是一个字符串列表，每个字符串都以一个换行符结
+   束且有些还包含内部换行符。 当这些行被拼接并打印时，打印的文本与
+   "print_exception()" 的完全相同。
+
+   在 3.5 版本发生变更: *etype* 参数会被忽略并根据 *value* 推断出来。
+
+   在 3.10 版本发生变更: 此函数的行为和签名已被修改以与
+   "print_exception()" 相匹配。
+
+traceback.format_exc(limit=None, chain=True)
+
+   这类似于 "print_exc(limit)" 但会返回一个字符串而不是打印到一个文件
+   。
+
+traceback.format_tb(tb, limit=None)
+
+   是 "format_list(extract_tb(tb, limit))" 的简写形式。
+
+traceback.format_stack(f=None, limit=None)
+
+   是 "format_list(extract_stack(f, limit))" 的简写形式。
+
+traceback.clear_frames(tb)
+
+   通过调用每个 帧对象 的 "clear()" 方法来清除 回溯 *tb* 中所有栈帧的
+   局部变量。
+
+   Added in version 3.4.
+
+traceback.walk_stack(f)
+
+   从给定的帧开始访问 "f.f_back" 之后的栈内容，产生每一个帧和帧对应的
+   行号。 如果 *f* 为 "None"，则会使用当前栈。 这个辅助函数要与
+   "StackSummary.extract()" 一起使用。
+
+   Added in version 3.5.
+
+   在 3.14 版本发生变更: 此函数之前返回一个在首次迭代时才遍历栈的生成
+   器。 现在返回的生成器则是当 "walk_stack" 被调用时栈的状态。
+
+traceback.walk_tb(tb)
+
+   访问 "tb_next" 之后的回溯并产生每一个帧和帧对应的行号。 这个辅助函
+   数要与 "StackSummary.extract()" 一起使用。
+
+   Added in version 3.5.
+
+
+"TracebackException" 对象
+=========================
+
+Added in version 3.5.
+
+"TracebackException" 对象基于实际异常创建以便捕获数据供稍后打印。 它们
+通过避免持有对 回溯 和 帧 对象的引用提供了存储此信息的更轻量方法。 此
+外，相比上文所述的模块级函数它们还公开了更多选项用于配置输出。
+
+class traceback.TracebackException(exc_type, exc_value, exc_traceback, *, limit=None, lookup_lines=True, capture_locals=False, compact=False, max_group_width=15, max_group_depth=10)
+
+   捕获异常以供稍后渲染。 *limit*, *lookup_lines* 和 *capture_locals*
+   的含义与 "StackSummary" 类的相同。
+
+   如果 *compact* 为真值，则只有 "TracebackException" 的 "format()" 方
+   法所需要的数据会被保存在类属性中。 特别地，"__context__" 字段只有在
+   "__cause__" 为 "None" 且 "__suppress_context__" 为假值时才会被计算
+   。
+
+   请注意当局部变量被捕获时，它们也会被显示在回溯中。
+
+   *max_group_width* 和 *max_group_depth* 控制异常组的格式化 (参见
+   "BaseExceptionGroup")。 depth 是指分组的嵌套层级，而 width 是指一个
+   异常组的异常数组的大小。 格式化的输出在达到某个限制时将被截断。
+
+   在 3.10 版本发生变更: 增加了 *compact* 形参。
+
+   在 3.11 版本发生变更: 添加了 *max_group_width* 和 *max_group_depth*
+   形参。
+
+   __cause__
+
+      原始 "__cause__" 的 "TracebackException"。
+
+   __context__
+
+      原始 "__context__" 的 "TracebackException"。
+
+   exceptions
+
+      如果 "self" 代表一个 "ExceptionGroup"，此字段将保存一个由代表被
+      嵌套异常的 "TracebackException" 实例组成的列表。 否则它将为
+      "None"。
+
+      Added in version 3.11.
+
+   __suppress_context__
+
+      来自原始异常的 "__suppress_context__" 值。
+
+   __notes__
+
+      来自原始异常的 "__notes__" 值，或者如果异常没有任何注释则为
+      "None"。 如果它不为 "None" 则会在异常字符串之后的回溯中进行格式
+      化。
+
+      Added in version 3.11.
+
+   stack
+
+      代表回溯的 "StackSummary"。
+
+   exc_type
+
+      原始回溯的类。
+
+      自 3.13 版本弃用.
+
+   exc_type_str
+
+      原始异常类的字符串显示。
+
+      Added in version 3.13.
+
+   filename
+
+      针对语法错误 —— 错误发生所在的文件名。
+
+   lineno
+
+      针对语法错误 —— 错误发生所在的行号。
+
+   end_lineno
+
+      针对语法错误 —— 错误发生所在的末尾行号。 如不存在则可以为 "None"
+      。
+
+      Added in version 3.10.
+
+   text
+
+      针对语法错误 —— 错误发生所在的文本。
+
+   offset
+
+      针对语法错误 —— 错误发生所在的文本内部的偏移量。
+
+   end_offset
+
+      针对语法错误 —— 错误发生所在的文本末尾偏移量。 如不存在则可以为
+      "None"。
+
+      Added in version 3.10.
+
+   msg
+
+      针对语法错误 —— 编译器错误消息。
+
+   classmethod from_exception(exc, *, limit=None, lookup_lines=True, capture_locals=False)
+
+      捕获一个异常以便随后渲染。 *limit*, *lookup_lines* 和
+      *capture_locals* 的含义与 "StackSummary" 类的相同。
+
+      请注意当局部变量被捕获时，它们也会被显示在回溯中。
+
+   print(*, file=None, chain=True)
+
+      将 "format()" 所返回的异常信息打印至 *file* (默认为
+      "sys.stderr")。
+
+      Added in version 3.11.
+
+   format(*, chain=True)
+
+      格式化异常。
+
+      如果 *chain* 不为 "True"，则 "__cause__" 和 "__context__" 将不会
+      被格式化。
+
+      返回值是一个字符串的生成器，其中每个字符串都以换行符结束并且有些
+      还会包含内部换行符。 "print_exception()" 是此方法的一个包装器，
+      它只是将这些行打印到一个文件。
+
+   format_exception_only(*, show_group=False)
+
+      格式化回溯的异常部分。
+
+      返回值是一个字符串的生成器，每个字符串都以一个换行符结束。
+
+      当 *show_group* 为 "False" 时，生成器会发出异常消息并附带其注释
+      （如果有的话）。 异常消息通常是一个字符串；但是，对于
+      "SyntaxError" 异常，它将由多行组成并且（当打印时）会显示语法错误
+      发生位置的详细信息。
+
+      当 *show_group* 为 "True"，并且异常为 "BaseExceptionGroup" 的实
+      例时，还会递归地包括嵌套的异常，并根据它们的嵌套深度添加缩进。
+
+      在 3.11 版本发生变更: 异常的 "注释" 现在将被包括在输出中。
+
+      在 3.13 版本发生变更: 增加了 *show_group* 形参。
+
+
+"StackSummary" 对象
+===================
+
+Added in version 3.5.
+
+"StackSummary" 对象代表一个可被格式化的调用栈。
+
+class traceback.StackSummary
+
+   classmethod extract(frame_gen, *, limit=None, lookup_lines=True, capture_locals=False)
+
+      根据一个帧生成器（例如由 "walk_stack()" 或 "walk_tb()" 所返回的
+      对象）构造 "StackSummary" 对象。
+
+      如果提供了 *limit*，则只从 *frame_gen* 提取该参数所指定数量的帧
+      。 如果 *lookup_lines* 为 "False"，则返回的 "FrameSummary" 对象
+      将不会读入它们的行，这使得创建 "StackSummary" 的开销更低（如果它
+      不会被实际格式化这就很有价值）。 如果 *capture_locals* 为 "True"
+      则每个 "FrameSummary" 中的局部变量会被捕获为对象表示形式。
+
+      在 3.12 版本发生变更: 在局部变量的 "repr()" 上被引发的异常（当
+      *capture_locals* 为 "True" 时）不会再被传播给调用方。
+
+   classmethod from_list(a_list)
+
+      从所提供的 "FrameSummary" 对象列表或旧式的元组列表构造一个
+      "StackSummary" 对象。 每个元组都应当是以 *文件名*, *行号*, *名称
+      *, *行* 为元素的 4 元组。
+
+   format()
+
+      返回一个可打印的字符串列表。 结果列表中的每个字符串各自对应来自
+      栈的单独的 帧。 每个字符串都以一个换行符结束；对于带有源文本行的
+      条目来说，字符串还可能包含内部换行符。
+
+      对于同一帧与行的长序列，将显示前几个重复项，后面跟一个指明之后的
+      实际重复次数的摘要行。
+
+      在 3.6 版本发生变更: 重复帧的长序列现在将被缩减。
+
+   format_frame_summary(frame_summary)
+
+      返回用于打印栈中涉及的某一个 帧 的字符串。 此方法会为每个要用
+      "StackSummary.format()" 来打印的 "FrameSummary" 对象进行调用。
+      如果它返回 "None"，该帧将从输出中被省略。
+
+      Added in version 3.11.
+
+
+"FrameSummary" 对象
+===================
+
+Added in version 3.5.
+
+"FrameSummary" 对象表示 回溯 中的某一个 帧。
+
+class traceback.FrameSummary(filename, lineno, name, *, lookup_line=True, locals=None, line=None, end_lineno=None, colno=None, end_colno=None)
+
+   代表 回溯 或栈中被格式化或打印的一个单独 帧。 它还可能带有包括在其
+   中的帧局部变量的字符串化版本。 如果 *lookup_line* 为 "False"，则源
+   代码不会被查找直到 "FrameSummary" 的 "line" 属性被访问（这还会在将
+   其转换为 "tuple" 时发生）。 "line" 可能会被直接提供，并将完全阻止行
+   查找的发生。 *locals* 是一个可选的局部变量映射，如果有提供的话这些
+   变量的表示形式将被存储在概要中以便随后显示。
+
+   "FrameSummary" 实例具有以下属性：
+
+   filename
+
+      对应于该帧的源代码的文件名。 等价于访问 帧对象 *f* 上的
+      "f.f_code.co_filename"。
+
+   lineno
+
+      对应于该帧的源代码的行号。
+
+   name
+
+      等价于访问 帧对象 *f* 上的 "f.f_code.co_name"。
+
+   line
+
+      代表该帧的源代码的字符串，开头和末尾的空白将被去除。 如果源代码
+      不可用，它将为 "None"。
+
+   end_lineno
+
+      该帧源代码的末尾行号。 在默认情况下，它将被设为 "lineno" 且索引
+      号从 1 开始。
+
+      在 3.13 版本发生变更: 默认值从 "None" 改为 "lineno"。
+
+   colno
+
+      该帧源代码的列号。 在默认情况下，它将为 "None" 且索引号从 0 开始
+      。
+
+   end_colno
+
+      该帧源代码的末尾列号。 在默认情况下，它将为 "None" 且索引号从 0
+      开始。
+
+
+使用模块级函数的例子
+====================
+
+这个简单示例是一个基本的读取-求值-打印循环，类似于（但实用性小于）标准
+Python 交互式解释器循环。 对于解释器循环的更完整实现，请参阅 "code" 模
+块。
+
+   import sys, traceback
+
+   def run_user_code(envdir):
+       source = input(">>> ")
+       try:
+           exec(source, envdir)
+       except Exception:
+           print("Exception in user code:")
+           print("-"*60)
+           traceback.print_exc(file=sys.stdout)
+           print("-"*60)
+
+   envdir = {}
+   while True:
+       run_user_code(envdir)
+
+下面的例子演示了打印和格式化异常与回溯的不同方式:
+
+   import sys, traceback
+
+   def lumberjack():
+       bright_side_of_life()
+
+   def bright_side_of_life():
+       return tuple()[0]
+
+   try:
+       lumberjack()
+   except IndexError as exc:
+       print("*** print_tb:")
+       traceback.print_tb(exc.__traceback__, limit=1, file=sys.stdout)
+       print("*** print_exception:")
+       traceback.print_exception(exc, limit=2, file=sys.stdout)
+       print("*** print_exc:")
+       traceback.print_exc(limit=2, file=sys.stdout)
+       print("*** format_exc, first and last line:")
+       formatted_lines = traceback.format_exc().splitlines()
+       print(formatted_lines[0])
+       print(formatted_lines[-1])
+       print("*** format_exception:")
+       print(repr(traceback.format_exception(exc)))
+       print("*** extract_tb:")
+       print(repr(traceback.extract_tb(exc.__traceback__)))
+       print("*** format_tb:")
+       print(repr(traceback.format_tb(exc.__traceback__)))
+       print("*** tb_lineno:", exc.__traceback__.tb_lineno)
+
+该示例的输出看起来像是这样的:
+
+   *** print_tb:
+     File "<doctest...>", line 10, in <module>
+       lumberjack()
+       ~~~~~~~~~~^^
+   *** print_exception:
+   Traceback (most recent call last):
+     File "<doctest...>", line 10, in <module>
+       lumberjack()
+       ~~~~~~~~~~^^
+     File "<doctest...>", line 4, in lumberjack
+       bright_side_of_life()
+       ~~~~~~~~~~~~~~~~~~~^^
+   IndexError: tuple index out of range
+   *** print_exc:
+   Traceback (most recent call last):
+     File "<doctest...>", line 10, in <module>
+       lumberjack()
+       ~~~~~~~~~~^^
+     File "<doctest...>", line 4, in lumberjack
+       bright_side_of_life()
+       ~~~~~~~~~~~~~~~~~~~^^
+   IndexError: tuple index out of range
+   *** format_exc, first and last line:
+   Traceback (most recent call last):
+   IndexError: tuple index out of range
+   *** format_exception:
+   ['Traceback (most recent call last):\n',
+    '  File "<doctest default[0]>", line 10, in <module>\n    lumberjack()\n    ~~~~~~~~~~^^\n',
+    '  File "<doctest default[0]>", line 4, in lumberjack\n    bright_side_of_life()\n    ~~~~~~~~~~~~~~~~~~~^^\n',
+    '  File "<doctest default[0]>", line 7, in bright_side_of_life\n    return tuple()[0]\n           ~~~~~~~^^^\n',
+    'IndexError: tuple index out of range\n']
+   *** extract_tb:
+   [<FrameSummary file <doctest...>, line 10 in <module>>,
+    <FrameSummary file <doctest...>, line 4 in lumberjack>,
+    <FrameSummary file <doctest...>, line 7 in bright_side_of_life>]
+   *** format_tb:
+   ['  File "<doctest default[0]>", line 10, in <module>\n    lumberjack()\n    ~~~~~~~~~~^^\n',
+    '  File "<doctest default[0]>", line 4, in lumberjack\n    bright_side_of_life()\n    ~~~~~~~~~~~~~~~~~~~^^\n',
+    '  File "<doctest default[0]>", line 7, in bright_side_of_life\n    return tuple()[0]\n           ~~~~~~~^^^\n']
+   *** tb_lineno: 10
+
+下面的例子演示了打印和格式化栈的不同方式:
+
+   >>> import traceback
+   >>> def another_function():
+   ...     lumberstack()
+   ...
+   >>> def lumberstack():
+   ...     traceback.print_stack()
+   ...     print(repr(traceback.extract_stack()))
+   ...     print(repr(traceback.format_stack()))
+   ...
+   >>> another_function()
+     File "<doctest>", line 10, in <module>
+       another_function()
+     File "<doctest>", line 3, in another_function
+       lumberstack()
+     File "<doctest>", line 6, in lumberstack
+       traceback.print_stack()
+   [('<doctest>', 10, '<module>', 'another_function()'),
+    ('<doctest>', 3, 'another_function', 'lumberstack()'),
+    ('<doctest>', 7, 'lumberstack', 'print(repr(traceback.extract_stack()))')]
+   ['  File "<doctest>", line 10, in <module>\n    another_function()\n',
+    '  File "<doctest>", line 3, in another_function\n    lumberstack()\n',
+    '  File "<doctest>", line 8, in lumberstack\n    print(repr(traceback.format_stack()))\n']
+
+最后这个例子演示了最后几个格式化函数:
+
+   >>> import traceback
+   >>> traceback.format_list([('spam.py', 3, '<module>', 'spam.eggs()'),
+   ...                        ('eggs.py', 42, 'eggs', 'return "bacon"')])
+   ['  File "spam.py", line 3, in <module>\n    spam.eggs()\n',
+    '  File "eggs.py", line 42, in eggs\n    return "bacon"\n']
+   >>> an_error = IndexError('tuple index out of range')
+   >>> traceback.format_exception_only(an_error)
+   ['IndexError: tuple index out of range\n']
+
+
+使用 "TracebackException" 的示例
+================================
+
+使用辅助类，我们将有更多的选项:
+
+   >>> import sys
+   >>> from traceback import TracebackException
+   >>>
+   >>> def lumberjack():
+   ...     bright_side_of_life()
+   ...
+   >>> def bright_side_of_life():
+   ...     t = "bright", "side", "of", "life"
+   ...     return t[5]
+   ...
+   >>> try:
+   ...     lumberjack()
+   ... except IndexError as e:
+   ...     exc = e
+   ...
+   >>> try:
+   ...     try:
+   ...         lumberjack()
+   ...     except:
+   ...         1/0
+   ... except Exception as e:
+   ...     chained_exc = e
+   ...
+   >>> # limit 的效果和模块级函数一样
+   >>> TracebackException.from_exception(exc, limit=-2).print()
+   Traceback (most recent call last):
+     File "<python-input-1>", line 6, in lumberjack
+       bright_side_of_life()
+       ~~~~~~~~~~~~~~~~~~~^^
+     File "<python-input-1>", line 10, in bright_side_of_life
+       return t[5]
+              ~^^^
+   IndexError: tuple index out of range
+
+   >>> # capture_locals 添加帧中的局部变量
+   >>> TracebackException.from_exception(exc, limit=-2, capture_locals=True).print()
+   Traceback (most recent call last):
+     File "<python-input-1>", line 6, in lumberjack
+       bright_side_of_life()
+       ~~~~~~~~~~~~~~~~~~~^^
+     File "<python-input-1>", line 10, in bright_side_of_life
+       return t[5]
+              ~^^^
+       t = ("bright", "side", "of", "life")
+   IndexError: tuple index out of range
+
+   >>> # print() 的 *chain* 关键字参数控制是否要显示
+   >>> # 串连的异常
+   >>> TracebackException.from_exception(chained_exc).print()
+   Traceback (most recent call last):
+     File "<python-input-19>", line 4, in <module>
+       lumberjack()
+       ~~~~~~~~~~^^
+     File "<python-input-8>", line 7, in lumberjack
+       bright_side_of_life()
+       ~~~~~~~~~~~~~~~~~~~^^
+     File "<python-input-8>", line 11, in bright_side_of_life
+       return t[5]
+              ~^^^
+   IndexError: tuple index out of range
+
+   During handling of the above exception, another exception occurred:
+
+   Traceback (most recent call last):
+     File "<python-input-19>", line 6, in <module>
+       1/0
+       ~^~
+   ZeroDivisionError: division by zero
+
+   >>> TracebackException.from_exception(chained_exc).print(chain=False)
+   Traceback (most recent call last):
+     File "<python-input-19>", line 6, in <module>
+       1/0
+       ~^~
+   ZeroDivisionError: division by zero

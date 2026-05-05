@@ -1,0 +1,97 @@
+计划在 Python 3.16 中移除
+*************************
+
+* 导入系统：
+
+  * 当设置 "__spec__.loader" 失败时在模块上设置 "__loader__" 的做法已
+    被弃用。在 Python 3.16 中，"__loader__" 将不会再被设置或是被导入系
+    统或标准库纳入考虑。
+
+* "array":
+
+  * "'u'" 格式代码 ("wchar_t") 自 Python 3.3 起已在文档中弃用并自
+    Python 3.13 起在运行时弃用。对于 Unicode 字符请改用 "'w'" 格式代码
+    ("Py_UCS4")。
+
+* "asyncio":
+
+  * "asyncio.iscoroutinefunction()" 已被弃用并将在 Python 3.16 中移除
+    ，请改用 "inspect.iscoroutinefunction()"。 （由李佳昊和 Kumar
+    Aditya 在 gh-122875 中贡献。）
+
+  * "asyncio" 策略系统已被弃用并将在 Python 3.16 中移除。具体而言，是
+    弃用了下列类和函数：
+
+    * "asyncio.AbstractEventLoopPolicy"
+
+    * "asyncio.DefaultEventLoopPolicy"
+
+    * "asyncio.WindowsSelectorEventLoopPolicy"
+
+    * "asyncio.WindowsProactorEventLoopPolicy"
+
+    * "asyncio.get_event_loop_policy()"
+
+    * "asyncio.set_event_loop_policy()"
+
+    用户应当使用 "asyncio.run()" 或 "asyncio.Runner" 并附带
+    *loop_factory* 以使用想要的事件循环实现。
+
+    例如，在 Windows 上使用 "asyncio.SelectorEventLoop":
+
+       import asyncio
+
+       async def main():
+           ...
+
+       asyncio.run(main(), loop_factory=asyncio.SelectorEventLoop)
+
+    （由 Kumar Aditya 在 gh-127949 中贡献。）
+
+* "builtins":
+
+  * 对布尔类型 "~True" 或 "~False" 执行按位取反的操作自 Python 3.12 起
+    已被弃用，因为它会产生奇怪和不直观的结果 ("-2" 和 "-1")。请改用
+    "not x" 来对布尔值执行逻辑否操作。 对于需要对下层整数执行按位取反
+    操作的少数场合，请显式地将其转换为 "int" ("~int(x)")。
+
+* "functools":
+
+  * 调用 "functools.reduce()" 的 Python 实现并传入 *function* 或
+    *sequence* 作为关键字参数的做法自 Python 3.14 起已被弃用。
+
+* "logging":
+
+  使用 *strm* 参数对自定义日志记录处理器提供支持的做法已被弃用并计划在
+  Python 3.16 中移除。改为使用 *stream* 参数定义处理器。 （由 Mariusz
+  Felisiak 在 gh-115032 中贡献。）
+
+* "mimetypes":
+
+  * 有效扩展以 '.' 开头或对于 "mimetypes.MimeTypes.add_type()" 为空。
+    未加点的扩展已弃用，在 Python 3.16 中将引发 "ValueError"。 （由
+    Hugo van Kemenade 在 gh-75223 中贡献。）
+
+* "shutil":
+
+  * "ExecError" 异常自 Python 3.14 起已被弃用。它自 Python 3.4 起就未
+    被 "shutil" 中的任何函数所使用，现在是 "RuntimeError" 的一个别名。
+
+* "symtable":
+
+  * "Class.get_methods" 方法自 Python 3.14 起被弃用。
+
+* "sys":
+
+  * "_enablelegacywindowsfsencoding()" 函数自 Python 3.13 起被弃用。请
+    改用 "PYTHONLEGACYWINDOWSFSENCODING" 环境变量。
+
+* "sysconfig":
+
+  * 自 Python 3.14 起 "sysconfig.expand_makefile_vars()" 函数已被弃用
+    。请使用 "sysconfig.get_paths()" 的 "vars" 参数代替。
+
+* "tarfile":
+
+  * 未写入文档也未被使用的 "TarFile.tarfile" 属性自 Python 3.13 起被弃
+    用。

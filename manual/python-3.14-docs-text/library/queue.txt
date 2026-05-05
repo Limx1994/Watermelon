@@ -1,0 +1,279 @@
+"queue" --- 同步队列类
+**********************
+
+**源代码:** Lib/queue.py
+
+======================================================================
+
+"queue" 模块实现了多生产者、多消费者队列。 这特别适用于消息必须安全地
+在多线程间交换的线程编程。 模块中的 "Queue" 类实现了所有需要的锁语义。
+
+本模块实现了三种类型的队列，它们的区别仅仅是条目的提取顺序。在 FIFO
+(first-in, first-out) 队列中，先添加的任务会先被提取。在 LIFO (last-
+in, first-out) 队列中，最近添加的条目会先被提取 (类似于一个栈)。在优先
+级队列中，条目将保持已排序状态 (使用 "heapq" 模块) 并且值最小的条目会
+先被提取。
+
+在内部，这三个类型的队列使用锁来临时阻塞竞争线程；然而，它们并未被设计
+用于线程的重入性处理。
+
+此外，模块实现了一个 "简单的"  FIFO (first-in, first-out) 队列类型，
+"SimpleQueue"，其特定的实现以较少的功能为代价提供了额外的保障。
+
+"queue" 模块定义了下列类和异常：
+
+class queue.Queue(maxsize=0)
+
+   Constructor for a FIFO (first-in, first-out) queue.  *maxsize* is
+   an integer that sets the upperbound limit on the number of items
+   that can be placed in the queue.  Insertion will block once this
+   size has been reached, until queue items are consumed.  If
+   *maxsize* is less than or equal to zero, the queue size is
+   infinite.
+
+class queue.LifoQueue(maxsize=0)
+
+   LIFO (last-in, first-out) 队列构造函数。 *maxsize* 是个整数，用于设
+   置可以放入队列中的项目数的上限。当达到这个大小的时候，插入操作将阻
+   塞至队列中的项目被消费掉。如果 *maxsize* 小于等于零，队列尺寸为无限
+   大。
+
+class queue.PriorityQueue(maxsize=0)
+
+   优先级队列构造函数。 *maxsize* 是个整数，用于设置可以放入队列中的项
+   目数的上限。当达到这个大小的时候，插入操作将阻塞至队列中的项目被消
+   费掉。如果 *maxsize* 小于等于零，队列尺寸为无限大。
+
+   值最小的条目会先被提取（值最小的条目即 "min(entries)" 所返回的条目
+   ）。条目的典型模式是如下形式的元组："(priority_number, data)".
+
+   如果 *data* 元素没有可比性，数据将被包装在一个类中，忽略数据值，仅
+   仅比较优先级数字:
+
+      from dataclasses import dataclass, field
+      from typing import Any
+
+      @dataclass(order=True)
+      class PrioritizedItem:
+          priority: int
+          item: Any=field(compare=False)
+
+class queue.SimpleQueue
+
+   无界的 FIFO (first-in, first-out) 队列构造函数。简单的队列，缺少任
+   务跟踪等高级功能。
+
+   Added in version 3.7.
+
+exception queue.Empty
+
+   在空的 "Queue" 对象上调用非阻塞的 "get()" (或 "get_nowait()") 时引
+   发的异常。
+
+exception queue.Full
+
+   对已满的 "Queue" 对象调用非阻塞的 "put()" (或 "put_nowait()") 时引
+   发的异常。
+
+exception queue.ShutDown
+
+   当在已被关闭的 "Queue" 对象上调用 "put()" 或 "get()" 时引发的异常。
+
+   Added in version 3.13.
+
+
+Queue 对象
+==========
+
+队列对象 ("Queue", "LifoQueue", 或者 "PriorityQueue") 提供下列描述的公
+共方法。
+
+Queue.qsize()
+
+   返回队列的大致大小。注意，qsize() > 0 不保证后续的 get() 不被阻塞，
+   qsize() < maxsize 也不保证 put() 不被阻塞。
+
+Queue.empty()
+
+   如果队列为空，返回 "True"，否则返回 "False"。如果 empty() 返回
+   "True"，不保证后续调用的 put() 不被阻塞。类似的，如果 empty() 返回
+   "False"，也不保证后续调用的 get() 不被阻塞。
+
+Queue.full()
+
+   如果队列是满的返回 "True"，否则返回 "False"。如果 full() 返回
+   "True" 不保证后续调用的 get() 不被阻塞。类似的，如果 full() 返回
+   "False" 也不保证后续调用的 put() 不被阻塞。
+
+Queue.put(item, block=True, timeout=None)
+
+   将 *item* 加入队列。如果可选参数 *block* 为真值并且 *timeout* 为
+   "None" (默认值)，则会在必要时阻塞直到有空闲槽位可用。如为 *timeout*
+   为正数，则将阻塞最多 *timeout* 秒并会在没有可用的空闲槽位时引发
+   "Full" 异常。在其他情况下 (*block* 为假值)，则如果空闲槽位立即可用
+   则将条目加入队列，否则将引发 "Full" 异常 (*timeout* 在此情况下将被
+   忽略)。
+
+   如果队列已被关闭则会引发 "ShutDown"。
+
+Queue.put_nowait(item)
+
+   相当于 "put(item, block=False)"。
+
+Queue.get(block=True, timeout=None)
+
+   从队列中移除并返回一个项目。如果可选参数 *block* 是 true 并且
+   *timeout* 是 "None" (默认值)，则在必要时阻塞至项目可得到。如果
+   *timeout* 是个正数，将最多阻塞 *timeout* 秒，如果在这段时间内项目不
+   能得到，将引发 "Empty" 异常。反之 (*block* 是 false) , 如果一个项目
+   立即可得到，则返回一个项目，否则引发 "Empty" 异常 (这种情况下，
+   *timeout* 将被忽略)。
+
+   POSIX 系统上在 3.0 之前，以及在 Windows 上的所有版本中，如果
+   *block* 为真值并且 *timeout* 为 "None"，此操作将进入在底层锁上的不
+   可中断的等待。这意味着不会发生任何异常，特别是 SIGINT 将不会触发
+   "KeyboardInterrupt".
+
+   如果队列已被关闭并且为空，或者如果队列已被立即关闭则会引发
+   "ShutDown"。
+
+Queue.get_nowait()
+
+   相当于 "get(False)"。
+
+提供了两个方法，用于支持跟踪 排队的任务 是否 被守护的消费者线程 完整的
+处理。
+
+Queue.task_done()
+
+   表示前面排队的任务已经被完成。被队列的消费者线程使用。每个 "get()"
+   被用于获取一个任务，后续调用 "task_done()" 告诉队列，该任务的处理已
+   经完成。
+
+   如果 "join()" 当前正在阻塞，在所有条目都被处理后，将解除阻塞 (意味
+   着每个 "put()" 进队列的条目的 "task_done()" 都被收到)。
+
+   如果被调用的次数多于放入队列中的项目数量，将引发 "ValueError" 异常
+   。
+
+Queue.join()
+
+   阻塞至队列中所有的元素都被接收和处理完毕。
+
+   当一个条目被添加到队列的时候未完成任务的计数将会增加。每当一个消费
+   者线程调用 "task_done()" 来表明该条目已被提取且其上的所有工作已完成
+   时未完成计数将会减少。当未完成计数降为零时，"join()" 将解除阻塞。
+
+
+等待任务完成
+------------
+
+如何等待排队的任务被完成的示例：
+
+   import threading
+   import queue
+
+   q = queue.Queue()
+
+   def worker():
+       while True:
+           item = q.get()
+           print(f'Working on {item}')
+           print(f'Finished {item}')
+           q.task_done()
+
+   # 启动工作线程。
+   threading.Thread(target=worker, daemon=True).start()
+
+   # 向工作线程发送三十个任务请求。
+   for item in range(30):
+       q.put(item)
+
+   # 阻塞直到所有任务完成。
+   q.join()
+   print('All work completed')
+
+
+终结队列
+--------
+
+当不再需要时，"Queue" 对象可被缩减直至为空或是通过硬关闭立即终结。
+
+Queue.shutdown(immediate=False)
+
+   将一个 "Queue" 实例置为关闭模式。
+
+   该队列将不可再增长。未来对 "put()" 的调用将引发 "ShutDown"。当前被
+   阻塞的 "put()" 调用方将被取消阻塞并会在之前被阻塞的线程中引发
+   "ShutDown"。
+
+   如果 *immediate* 为假值（默认），则队列可通过 "get()" 调用正常缩减
+   以提取已被加载的任务。
+
+   而如果 "task_done()" 针对每个剩余的任务被调用，则挂起的 "join()" 将
+   被正常取消阻塞。
+
+   一旦队列为空，未来对 "get()" 的调用将会引发 "ShutDown"。
+
+   如果 *immediate* 为真值，则队列会被立即终结。队列将缩减至完全为空而
+   未完成任务的计数将去除已缩减的任务数。如果未完成任务数为零，则
+   "join()" 的调用方将被取消阻塞。此外，被阻塞的 "get()" 调用方也将被
+   取消阻塞并将引发 "ShutDown" 因为队列已为空。
+
+   在 *immediate* 设为真值的情况下使用 "join()" 需要小心谨慎。 这会取
+   消对已加入任务的阻塞即使任务尚未被执行，从而破坏通常的加入队列任务
+   的不变性。
+
+   Added in version 3.13.
+
+
+SimpleQueue 对象
+================
+
+"SimpleQueue" 对象提供下列描述的公共方法。
+
+SimpleQueue.qsize()
+
+   返回队列的大致大小。注意，qsize() > 0 不保证后续的 get() 不被阻塞。
+
+SimpleQueue.empty()
+
+   如果队列为空则返回 "True"，否则返回 "False"。如果 empty() 返回
+   "False" 则不保证后续对 get() 的调用将不会阻塞。
+
+SimpleQueue.put(item, block=True, timeout=None)
+
+   将 *item* 放入队列。此方法永不阻塞，始终成功（除了潜在的低级错误，
+   例如内存分配失败）。可选参数 *block* 和 *timeout* 仅仅是为了保持
+   "Queue.put()" 的兼容性而提供，其值被忽略。
+
+   此方法具有一个可重入的 C 实现。也就是说，一个 "put()" 或 "get()" 调
+   用可以被同一线程中的另一个 "put()" 调用打断而不会发生死锁或破坏队列
+   内部的状态。这使得它适用于析构器如 "__del__" 方法或 "weakref" 回调
+   。
+
+SimpleQueue.put_nowait(item)
+
+   相当于 "put(item, block=False)"，为保持与 "Queue.put_nowait()" 的兼
+   容性而提供。
+
+SimpleQueue.get(block=True, timeout=None)
+
+   从队列中移除并返回一个项目。如果可选参数 *block* 是 true 并且
+   *timeout* 是 "None" (默认值)，则在必要时阻塞至项目可得到。如果
+   *timeout* 是个正数，将最多阻塞 *timeout* 秒，如果在这段时间内项目不
+   能得到，将引发 "Empty" 异常。反之 (*block* 是 false) , 如果一个项目
+   立即可得到，则返回一个项目，否则引发 "Empty" 异常 (这种情况下，
+   *timeout* 将被忽略)。
+
+SimpleQueue.get_nowait()
+
+   相当于 "get(False)"。
+
+参见:
+
+  类 "multiprocessing.Queue"
+     一个用于多进程上下文的队列类（而不是多线程）。
+
+  "collections.deque" 是无界队列的一个替代实现，具有快速的不需要锁并且
+  支持索引的原子化 "append()" 和 "popleft()" 操作。

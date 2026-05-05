@@ -1,0 +1,578 @@
+"annotationlib" --- 用于内省注解的功能
+**************************************
+
+Added in version 3.14.
+
+**源代码:** Lib/annotationlib.py
+
+======================================================================
+
+"annotationlib" 模块提供了用于在模块、类和函数上内省 *注解* 的工具。
+
+类型注解是 延迟求值 的，并且通常包含对在注解创建时尚未定义的对象的前向
+引用。这个模块提供了一组底层工具，即使在存在前向引用和其他极端情况时，
+也能以可靠的方式获取注解。
+
+该模块支持以三种主要格式 (见 "Format") 检索注解，每种格式适用于不同的
+使用场景：
+
+* "VALUE" 会对注解进行求值并返回其值。这种格式使用起来最直接，但可能会
+  引发错误，例如当注解中包含对未定义名称的引用时。
+
+* "FORWARDREF" 会为无法解析的注解返回 "ForwardRef" 对象，允许你在不求
+  值注解的情况下检查它们。当你需要处理可能包含未解析前向引用的注解时，
+  这种格式非常有用。
+
+* "STRING" 会将注解以字符串形式返回，类似于其在源代码文件中的呈现方式
+  。这对于希望以可读方式展示注解的文档生成器非常有用。
+
+"get_annotations()" 函数是检索注解的主要入口点。给定一个函数、类或模块
+，它会以请求的格式返回注解字典。此模块还提供了直接处理用于求值注解的
+*annotate function* 的功能，例如 "get_annotate_from_class_namespace()"
+和 "call_annotate_function()"，以及用于处理 *求值函数* 的
+"call_evaluate_function()" 函数。
+
+小心:
+
+  此模块中的大多数功能都可执行任意代码；请参阅 安全章节 了解详情。
+
+参见:
+
+  **PEP 649** 提出了 Python 中注解工作方式的当前模型。
+
+  **PEP 749** 在 **PEP 649** 的基础上进行了多方面扩展，并引入了
+  "annotationlib" 模块。
+
+  注解最佳实践 提供了使用注解的最佳实践指南。
+
+  typing-extensions 提供了 "get_annotations()" 的向后移植版本，可在早
+  期 Python 版本上使用。
+
+
+注解语义（Annotation semantics）
+================================
+
+在 Python 3 的发展历程中，注解的求值方式发生了多次变化，目前仍依赖于
+future import。注解的执行模型主要有以下几种：
+
+* *标准语义* (Python 3.0 至 3.13 的默认行为；参见 **PEP 3107** 和
+  **PEP 526**)：注解会在源代码中被遇到时立即求值。
+
+* *字符串化注解* (在 Python 3.7 及更高版本中使用 "from __future__
+  import annotations" 启用；参见 **PEP 563**)：注解仅以字符串形式存储
+  。
+
+* *延迟求值* (Python 3.14 及更高版本的默认行为；参见 **PEP 649** 和
+  **PEP 749**)：注解会延迟求值，仅在被访问时才会进行。
+
+举个例子，考虑以下程序:
+
+   def func(a: Cls) -> None:
+       print(a)
+
+   class Cls: pass
+
+   print(func.__annotations__)
+
+其行为如下：
+
+* 在标准语义（Python 3.13 及更早版本）下，程序会在定义 "func" 的行抛出
+  "NameError"，因为此时 "Cls" 是一个未定义的名称。
+
+* 在字符串化注解 (使用 "from __future__ import annotations") 下，程序
+  会打印 "{'a': 'Cls', 'return': 'None'}".
+
+* 在延迟求值（Python 3.14 及更高版本）下，程序会打印 "{'a': <class
+  'Cls'>, 'return': None}"。
+
+当 Python 3.0 通过 **PEP 3107** 首次引入函数注解时，采用标准语义是因为
+这是实现注解最简单、最直观的方式。Python 3.6 通过 **PEP 526** 引入变量
+注解时，也使用了相同的执行模型。然而，标准语义在将注解用作类型提示时会
+引发问题，例如在遇到注解时需要引用尚未定义的名称。此外，在模块导入时执
+行注解还存在性能问题。因此，Python 3.7 通过 **PEP 563** 引入了使用
+"from __future__ import annotations" 语法将注解存储为字符串的功能。当
+时的计划是最终将这种行为设为默认，但出现了一个问题：对于在运行时内省注
+解的人来说，字符串化注解更难处理。另一个提案 **PEP 649** 引入了第三种
+执行模型——延迟求值，并在 Python 3.14 中实现。如果存在 "from __future__
+import annotations"，仍然会使用字符串化注解，但这种行为最终会被移除。
+
+
+类
+==
+
+class annotationlib.Format
+
+   一个 "IntEnum" 枚举类，用于描述注解可以返回的格式。该枚举的成员或其
+   等效整数值可传递给 "get_annotations()" 以及本模块中的其他函数，也可
+   传递给 "__annotate__" 函数。
+
+   VALUE = 1
+
+      值是对注解表达式求值的结果。
+
+   VALUE_WITH_FAKE_GLOBALS = 2
+
+      特殊值，用于表示注解函数正在具有伪全局变量的特殊环境中求值。当传
+      递此值时，注解函数应返回与 "Format.VALUE" 格式相同的值，或者抛出
+      "NotImplementedError" 以表示它们不支持在此环境中执行。此格式仅在
+      内部使用，不应传递给本模块中的函数。
+
+   FORWARDREF = 3
+
+      对于已定义的值，使用真实的注解值（按照 "Format.VALUE" 格式）；对
+      于未定义的值，使用 "ForwardRef" 代理。真实对象可能包含对
+      "ForwardRef" 代理对象的引用。
+
+   STRING = 4
+
+      值是注解在源代码中显示的文本字符串，可能经过包括但不限于空白符规
+      范化和常数值优化的修改。
+
+      这些字符串的确切值可能在未来的 Python 版本中发生变化。
+
+   Added in version 3.14.
+
+class annotationlib.ForwardRef
+
+   用于注解中前向引用的代理对象。
+
+   当使用 "FORWARDREF" 格式且注解包含无法解析的名称时，将返回此类的实
+   例。这种情况通常发生在注解中使用前向引用时，例如在类定义之前引用该
+   类。
+
+   __forward_arg__
+
+      一个包含生成 "ForwardRef" 所执行代码的字符串。该字符串可能与原始
+      源代码不完全等同。
+
+   evaluate(*, owner=None, globals=None, locals=None, type_params=None, format=Format.VALUE)
+
+      对前向引用进行求值，返回其值。
+
+      如果 *format* 参数为 "VALUE" (默认值)，当此方法遇到无法解析的前
+      向引用名称时，可能会抛出 "NameError" 等异常。该方法的参数可用于
+      为那些原本未定义的名称提供绑定。如果 *format* 参数为
+      "FORWARDREF"，此方法绝不会抛出异常，但可能会返回一个
+      "ForwardRef" 实例。 例如，当前向引用对象包含代码
+      "list[undefined]"，其中 "undefined" 是一个未定义的名称，使用
+      "FORWARDREF" 格式对其求值将返回 "list[ForwardRef('undefined')]"
+      。如果 *format* 参数为 "STRING"，此方法将返回 "__forward_arg__".
+
+      *owner* 形参提供了向此方法传递作用域信息的首选机制。"ForwardRef"
+      的所有者是包含该 "ForwardRef" 所源自的注解的对象，例如模块对象、
+      类型对象或函数对象。
+
+      *globals*、*locals* 和 *type_params* 形参提供了一种更精确的机制
+      ，用于影响在求值 "ForwardRef" 时可用的名称。*globals* 和
+      *locals* 会传递给 "eval()"，表示求值该名称时的全局和局部命名空间
+      。*type_params* 参数与使用原生语法创建的 泛型类 和 函数 对象相关
+      。它是一个 类型形参 元组，表示在求值前向引用时的作用域内的类型参
+      数。例如，如果要对从泛型类 "C" 的类命名空间中的注解获取的
+      "ForwardRef" 进行求值，*type_params* 应设置为
+      "C.__type_params__"。
+
+      由 "get_annotations()" 返回的 "ForwardRef" 实例会保留其来源作用
+      域的信息，因此调用此方法时无需传递额外参数即可对这些对象进行求值
+      。而通过其他方式创建的 "ForwardRef" 实例可能不包含任何作用域信息
+      ，因此可能需要向此方法传递参数才能成功对其进行求值。
+
+      如果未提供 *owner*、*globals*、*locals* 或 *type_params* 参数，
+      并且 "ForwardRef" 不包含其来源信息，则会使用空的全局和局部字典。
+
+   Added in version 3.14.
+
+
+函数
+====
+
+annotationlib.annotations_to_string(annotations)
+
+   将包含运行时值的注解字典转换为仅包含字符串的字典。如果值已经是字符
+   串，则保持不变；否则，使用 "type_repr()" 进行转换。这是为用户提供的
+   注解函数提供的辅助工具，这些函数支持 "STRING" 格式，但无法访问创建
+   注解的代码。
+
+   例如，这用于为通过函数式语法创建的 "typing.TypedDict" 类实现
+   "STRING" 格式：
+
+      >>> from typing import TypedDict
+      >>> Movie = TypedDict("movie", {"name": str, "year": int})
+      >>> get_annotations(Movie, format=Format.STRING)
+      {'name': 'str', 'year': 'int'}
+
+   Added in version 3.14.
+
+annotationlib.call_annotate_function(annotate, format, *, owner=None)
+
+   使用给定的 *format* ("Format" 枚举的成员) 调用 *annotate function*
+   *annotate*，并返回该函数生成的注解字典。
+
+   之所以需要这个辅助函数，是因为编译器为函数、类和模块生成的注解函数
+   在直接调用时仅支持 "VALUE" 格式。为了支持其他格式，此函数会在一个特
+   殊环境中调用注解函数，使其能够生成其他格式的注解。在实现需要在类构
+   建过程中部分求值注解的功能时，这是一个有用的构建块。
+
+   *owner* 是拥有注解函数的对象，通常是函数、类或模块。如果提供了该参
+   数，它会在 "FORWARDREF" 格式中用于生成一个携带更多信息的
+   "ForwardRef" 对象。
+
+   参见: **PEP 649** 中包含了对此函数所使用的实现技术的解释。
+
+   Added in version 3.14.
+
+annotationlib.call_evaluate_function(evaluate, format, *, owner=None)
+
+   使用给定的 *format* ("Format" 枚举的成员) 调用 *evaluate function*
+   *evaluate*，并返回该函数生成的值。这与 "call_annotate_function()"
+   类似，但后者始终返回一个将字符串映射到注解的字典，而此函数返回单个
+   值。
+
+   此功能旨在与为类型别名和类型参数相关的延迟求值元素生成的求值函数一
+   起使用：
+
+   * "typing.TypeAliasType.evaluate_value()"，类型别名的值
+
+   * "typing.TypeVar.evaluate_bound()"，类型变量的边界
+
+   * "typing.TypeVar.evaluate_constraints()"，类型变量的约束
+
+   * "typing.TypeVar.evaluate_default()"，类型变量的默认值
+
+   * "typing.ParamSpec.evaluate_default()"，形参规格的默认值
+
+   * "typing.TypeVarTuple.evaluate_default()"，类型变量元组的默认值
+
+   *owner* 是拥有求值函数的对象，例如类型别名或类型变量对象。
+
+   *format* 可用于控制返回值的格式：
+
+      >>> type Alias = undefined
+      >>> call_evaluate_function(Alias.evaluate_value, Format.VALUE)
+      Traceback (most recent call last):
+      ...
+      NameError: name 'undefined' is not defined
+      >>> call_evaluate_function(Alias.evaluate_value, Format.FORWARDREF)
+      ForwardRef('undefined')
+      >>> call_evaluate_function(Alias.evaluate_value, Format.STRING)
+      'undefined'
+
+   Added in version 3.14.
+
+annotationlib.get_annotate_from_class_namespace(namespace)
+
+   从类命名空间字典 *namespace* 中检索 *annotate function*。如果命名空
+   间中不包含注解函数，则返回 "None"。这在类完全创建之前（例如在元类中
+   ）特别有用；类创建后，可以通过 "cls.__annotate__" 检索注解函数。有
+   关在元类中使用此函数的示例，请参阅 下文。
+
+   Added in version 3.14.
+
+annotationlib.get_annotations(obj, *, globals=None, locals=None, eval_str=False, format=Format.VALUE)
+
+   计算一个对象的注解字典。
+
+   *obj* 可以是可调用对象、类、模块或其他具有 "__annotate__" 或
+   "__annotations__" 属性的对象。传递任何其他对象会引发 "TypeError"。
+
+   *format* 形参控制注解的返回格式，必须是 "Format" 枚举的成员或其整数
+   值。不同格式的工作方式如下：
+
+   * VALUE: 首先尝试使用 "object.__annotations__"；如果该属性不存在，
+     则调用 "object.__annotate__" 函数（如果存在）。
+
+   * FORWARDREF: 如果 "object.__annotations__" 存在且可以成功求值，则
+     使用它；否则，调用 "object.__annotate__" 函数。如果该函数也不存在
+     ，则再次尝试使用 "object.__annotations__"，并重新引发访问它时发生
+     的任何错误。
+
+     * 当调用 "object.__annotate__" 时它会先附带 "FORWARDREF" 被调用。
+       如果该属性未被实现，它将再检查 "VALUE_WITH_FAKE_GLOBALS" 是否受
+       到支持并在伪全局环境中使用它。 如果这些格式均不受支持，它将回退
+       到使用 "VALUE"。如果 "VALUE" 失败，来自该调用的错误将被引发。
+
+   * STRING: 如果 "object.__annotate__" 存在，则首先调用它；否则，使用
+     "object.__annotations__" 并使用 "annotations_to_string()" 进行字
+     符串化。
+
+     * 当调用 "object.__annotate__" 时它会先附带 "STRING" 被调用。 如
+       果该属性未被实现，它将再检查 "VALUE_WITH_FAKE_GLOBALS" 是否受到
+       支持并在伪全局环境中使用它。 如果这些格式均不受支持，它将回退到
+       使用 "VALUE" 并附带使用 "annotations_to_string()" 转换后的结果
+       。如果 "VALUE" 失败，来自该调用的错误将被引发。
+
+   返回一个字典。"get_annotations()" 每次调用时都会返回一个新字典；对
+   同一对象调用两次会返回两个不同但相等的字典。
+
+   该函数帮助你处理若干细节：
+
+   * 如果 *eval_str* 为 True，则会使用 "eval()" 对 "str" 类型的值进行
+     反字符串化处理。这旨在配合字符串化的注解使用 (如 "from __future__
+     import annotations")。将 *eval_str* 与 "Format.VALUE" 以外的格式
+     一起设为 True 是错误的。
+
+   * 如果 *obj* 不包含注解字典，返回一个空字典。（函数和方法永远包含注
+     解字典；类、模块和其他类型的可调用对象则可能没有。）
+
+   * 忽略类上的继承注解以及元类上的注解。如果类没有自己的注解字典，则
+     返回空字典。
+
+   * 因安全原因，所有对于对象成员和字典值的访问将通过 "getattr()" 和
+     "dict.get()" 完成。
+
+   *eval_str* 控制是否将 "str" 类型的值替换为对这些值调用 "eval()" 的
+   结果：
+
+   * 如果 eval_str 为 true，则会对 "str" 类型的值调用 "eval()"。（注意
+     "get_annotations()" 不会捕获异常；如果 "eval()" 引发异常，它将使
+     堆栈展开到 "get_annotations()" 调用之外。）
+
+   * 如果 *eval_str* 为 false（默认值），则 "str" 类型的值保持不变。
+
+   *globals* 和 *locals* 会被传递给 "eval()"；更多信息请参阅 "eval()"
+   的文档。如果 *globals* 或 *locals* 为 "None"，此函数可能会根据
+   "type(obj)" 用特定于上下文的默认值替换该值：
+
+   * 如果 *obj* 是一个模块，*globals* 默认使用 "obj.__dict__"。
+
+   * 如果 *obj* 是一个类，*globals* 默认使用
+     "sys.modules[obj.__module__].__dict__"，而 *locals* 默认使用
+     *obj* 类的命名空间。
+
+   * 如果 *obj* 是一个可调用对象，*globals* 默认使用 "obj.__globals__"
+     ，不过如果 *obj* 是一个包装函数 (使用
+     "functools.update_wrapper()") 或 "functools.partial" 对象，则会对
+     其进行解包，直到找到一个未被包装的函数为止。
+
+   调用 "get_annotations()" 是访问任何对象的注解字典的最佳实践。有关注
+   解最佳实践的更多信息，请参阅 注解最佳实践.
+
+      >>> def f(a: int, b: str) -> float:
+      ...     pass
+      >>> get_annotations(f)
+      {'a': <class 'int'>, 'b': <class 'str'>, 'return': <class 'float'>}
+
+   Added in version 3.14.
+
+annotationlib.type_repr(value)
+
+   将任意 Python 值转换为适合 "STRING" 格式使用的形式。对于大多数对象
+   ，这会调用 "repr()"，但对某些对象（如类型对象）有特殊处理。
+
+   这旨在作为用户提供的注解函数的辅助工具，这些函数支持 "STRING" 格式
+   ，但无法访问创建注解的代码。它还可以用于为包含在注解中常见的值的其
+   他对象提供用户友好的字符串表示。
+
+   Added in version 3.14.
+
+
+例程
+====
+
+
+在元类中使用注解
+----------------
+
+元类 可能需要在类创建过程中检查甚至修改类体中的注解。实现这一需求需要
+从类命名空间字典中获取注解。对于使用 "from __future__ import
+annotations" 创建的类，注解会存储在字典的 "__annotations__" 键中。而对
+于其他带有注解的类，可以通过 "get_annotate_from_class_namespace()" 获
+取注解函数，再使用 "call_annotate_function()" 调用该函数来获取注解。通
+常建议优先使用 "FORWARDREF" 格式，因为这种格式允许注解引用在类创建时尚
+未解析的名称。
+
+要修改注解，最好创建一个包装注解函数，该函数调用原始注解函数，进行必要
+的调整，并返回结果。
+
+下面是一个元类的示例，该元类从类中过滤掉所有 "typing.ClassVar" 注解，
+并将它们放入单独的属性中：
+
+   import annotationlib
+   import typing
+
+   class ClassVarSeparator(type):
+      def __new__(mcls, name, bases, ns):
+         if "__annotations__" in ns:  # from __future__ import annotations
+            annotations = ns["__annotations__"]
+            classvar_keys = {
+               key for key, value in annotations.items()
+               # 为了简单起见，可以使用字符串比较；更稳健的解决方案
+               #  可以使用 annotationlib.ForwardRef.evaluate。
+               if value.startswith("ClassVar")
+            }
+            classvars = {key: annotations[key] for key in classvar_keys}
+            ns["__annotations__"] = {
+               key: value for key, value in annotations.items()
+               if key not in classvar_keys
+            }
+            wrapped_annotate = None
+         elif annotate := annotationlib.get_annotate_from_class_namespace(ns):
+            annotations = annotationlib.call_annotate_function(
+               annotate, format=annotationlib.Format.FORWARDREF
+            )
+            classvar_keys = {
+               key for key, value in annotations.items()
+               if typing.get_origin(value) is typing.ClassVar
+            }
+            classvars = {key: annotations[key] for key in classvar_keys}
+
+            def wrapped_annotate(format):
+               annos = annotationlib.call_annotate_function(annotate, format, owner=typ)
+               return {key: value for key, value in annos.items() if key not in classvar_keys}
+
+         else:  # 没有注解
+            classvars = {}
+            wrapped_annotate = None
+         typ = super().__new__(mcls, name, bases, ns)
+
+         if wrapped_annotate is not None:
+            # 将原始的 __annotate__ 函数用一个包装器包裹起来，该包装器会移除 ClassVars。
+            typ.__annotate__ = wrapped_annotate
+         typ.classvars = classvars  # 将 ClassVars 存储在一个单独的属性中。
+         return typ
+
+
+"STRING" 格式的局限性
+=====================
+
+"STRING" 格式的设计初衷是尽可能还原注解的源代码形式，但由于采用的实现
+策略限制，它并不总能精确恢复原始的源代码。
+
+首先，字符串化器显然无法恢复编译后代码中不存在的任何信息，包括注释、空
+白符、括号结构以及被编译器简化的操作。
+
+其次，字符串化器几乎可以拦截所有涉及在某个作用域中查找名称的操作，但它
+无法拦截完全基于常量的操作。由此推论，这也意味着在不可信代码上请求
+"STRING" 格式是不安全的：Python 功能强大，即使没有访问任何全局变量或内
+置函数，也有可能实现任意代码执行。例如：
+
+   >>> def f(x: (1).__class__.__base__.__subclasses__()[-1].__init__.__builtins__["print"]("Hello world")): pass
+   ...
+   >>> annotationlib.get_annotations(f, format=annotationlib.Format.STRING)
+   Hello world
+   {'x': 'None'}
+
+备注:
+
+  此特定示例在撰写本文时能够正常工作，但它依赖于实现细节，并不能保证在
+  未来版本中仍然有效。
+
+在 Python 中存在的各种表达式中，由 "ast" 模块表示，有些表达式是被支持
+的，这意味着 "STRING" 格式通常可以恢复原始源代码；而另一些表达式则不被
+支持，这可能导致输出不正确或产生错误。
+
+以下类型是受支持的（有些带有额外说明）：
+
+* "ast.BinOp"
+
+* "ast.UnaryOp"
+
+  * "ast.Invert" ("~"), "ast.UAdd" ("+") 和 "ast.USub" ("-") 受支持
+
+  * "ast.Not" ("not") 不受支持
+
+* "ast.Dict" (当使用 "**" 解包时除外)
+
+* "ast.Set"
+
+* "ast.Compare"
+
+  * "ast.Eq" 和 "ast.NotEq" 受支持
+
+  * "ast.Lt", "ast.LtE", "ast.Gt" 和 "ast.GtE" 受支持，但操作数可能被
+    交换
+
+  * "ast.Is", "ast.IsNot", "ast.In" 和 "ast.NotIn" 不受支持
+
+* "ast.Call" (当使用 "**" 解包时除外)
+
+* "ast.Constant" (但不是常量的准确表示形式；例如，字符串形式的转义序列
+  会丢失；十六进制数字会被转换为十进制)
+
+* "ast.Attribute" (假定其值不为常量)
+
+* "ast.Subscript" (假定其值不为常量)
+
+* "ast.Starred" ("*" 解包)
+
+* "ast.Name"
+
+* "ast.List"
+
+* "ast.Tuple"
+
+* "ast.Slice"
+
+以下表达式不被支持，但当字符串化器遇到它们时会抛出一个具有信息性的错误
+：
+
+* "ast.FormattedValue" (f-字符串；如果使用了如 "!r" 这样的转换说明符，
+  则不会检测到错误)
+
+* "ast.JoinedStr" (f-字符串)
+
+以下表达式不被支持，且会导致输出不正确：
+
+* "ast.BoolOp" ("and" 和 "or")
+
+* "ast.IfExp"
+
+* "ast.Lambda"
+
+* "ast.ListComp"
+
+* "ast.SetComp"
+
+* "ast.DictComp"
+
+* "ast.GeneratorExp"
+
+以下内容在注解作用域中不被允许，因此不予考虑：
+
+* "ast.NamedExpr" (":=")
+
+* "ast.Await"
+
+* "ast.Yield"
+
+* "ast.YieldFrom"
+
+
+"FORWARDREF" 格式的局限性
+=========================
+
+"FORWARDREF" 格式旨在尽可能生成实际值，对于无法解析的内容则用
+"ForwardRef" 对象替代。该格式受到的限制与 "STRING" 格式基本相同：当使
+用 "FORWARDREF" 格式求值时，若注解包含对字面值的操作或使用了不支持的表
+达式类型，可能会引发异常。
+
+以下是使用不支持的表达式时的行为示例：
+
+   >>> from annotationlib import get_annotations, Format
+   >>> def zerodiv(x: 1 / 0): ...
+   >>> get_annotations(zerodiv, format=Format.STRING)
+   Traceback (most recent call last):
+     ...
+   ZeroDivisionError: division by zero
+   >>> get_annotations(zerodiv, format=Format.FORWARDREF)
+   Traceback (most recent call last):
+     ...
+   ZeroDivisionError: division by zero
+   >>> def ifexp(x: 1 if y else 0): ...
+   >>> get_annotations(ifexp, format=Format.STRING)
+   {'x': '1'}
+
+
+内省注解的安全影响
+==================
+
+本模块的大部分功能涉及执行与注解相关的代码，这些代码可能执行任意操作。
+例如，"get_annotations()" 可能调用任意的 *annotate function*，而
+"ForwardRef.evaluate()" 可能对任意字符串调用 "eval()"。注解中包含的代
+码可能进行任意的系统调用、进入无限循环或执行任何其他操作。对于任何访问
+"__annotations__" 属性的操作，以及 "typing" 模块中处理注解的各种函数 (
+如 "typing.get_type_hints()") 也是如此。
+
+由此产生的任何安全问题同样适用于导入可能包含不受信任注解的代码后立即执
+行的情况：导入代码始终可能导致执行任意操作。然而，接受来自不受信任来源
+的字符串或其他输入并将其传递给任何用于内省注解的 API 是不安全的，例如
+通过编辑 "__annotations__" 字典或直接创建 "ForwardRef" 对象。

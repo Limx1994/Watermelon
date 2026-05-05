@@ -1,0 +1,225 @@
+元组对象
+********
+
+type PyTupleObject
+
+   这个 "PyObject" 的子类型代表一个 Python 的元组对象。
+
+PyTypeObject PyTuple_Type
+    * 属于 稳定 ABI.*
+
+   "PyTypeObject" 的实例代表一个 Python 元组类型，这与 Python 层面的
+   "tuple" 是相同的对象。
+
+int PyTuple_Check(PyObject *p)
+
+   如果 *p* 是一个 tuple 对象或者 tuple 类型的子类型的实例则返回真值。
+   此函数总是会成功执行。
+
+int PyTuple_CheckExact(PyObject *p)
+
+   如果 *p* 是一个 tuple 对象但不是 tuple 类型的子类型的实例则返回真值
+   。此函数总是会成功执行。
+
+PyObject *PyTuple_New(Py_ssize_t len)
+    *返回值：新的引用。** 属于 稳定 ABI.*
+
+   返回一个长度为 *len* 的新元组对象，或者失败时返回 "NULL" 并设置一个
+   异常。
+
+PyObject *PyTuple_Pack(Py_ssize_t n, ...)
+    *返回值：新的引用。** 属于 稳定 ABI.*
+
+   返回一个长度为 *n* 的新元组对象，或者失败时返回 "NULL" 并设置一个异
+   常。元组值初始化为指向 Python 对象的后续 *n* 个 C 参数。
+   "PyTuple_Pack(2, a, b)" 等价于 "Py_BuildValue("(OO)", a, b)"。
+
+Py_ssize_t PyTuple_Size(PyObject *p)
+    * 属于 稳定 ABI.*
+
+   接受一个指向元组对象的指针，并返回该元组的大小。出错时，返回 "-1"
+   并设置一个异常。
+
+Py_ssize_t PyTuple_GET_SIZE(PyObject *p)
+
+   类似于 "PyTuple_Size()"，但是不带错误检测。
+
+PyObject *PyTuple_GetItem(PyObject *p, Py_ssize_t pos)
+    *返回值：借入的引用。** 属于 稳定 ABI.*
+
+   返回 *p* 所指向的元组中位于 *pos* 处的对象。如果 *pos* 为负值或超出
+   范围，则返回 "NULL" 并设置一个 "IndexError" 异常。
+
+   返回的引用是从元组 *p* 借入的（也就是说：它只在你持有对 *p* 的引用
+   时才是可用的）。要获取 *strong reference*，请使用
+   "Py_NewRef(PyTuple_GetItem(...))" 或 "PySequence_GetItem()".
+
+PyObject *PyTuple_GET_ITEM(PyObject *p, Py_ssize_t pos)
+    *返回值：借入的引用。*
+
+   类似于 "PyTuple_GetItem()"，但不检查其参数。
+
+PyObject *PyTuple_GetSlice(PyObject *p, Py_ssize_t low, Py_ssize_t high)
+    *返回值：新的引用。** 属于 稳定 ABI.*
+
+   返回一个 *p* 指向的元组的 *low* 和 *high* 之间的切片，或者失败时返
+   回 "NULL" 并设置一个异常。
+
+   这等价于 Python 表达式 "p[low:high]"。不支持从元组末尾进行索引。
+
+int PyTuple_SetItem(PyObject *p, Py_ssize_t pos, PyObject *o)
+    * 属于 稳定 ABI.*
+
+   在 *p* 指向的元组的 *pos* 位置插入对对象 *o* 的引用。成功时返回 "0"
+   ；如果 *pos* 越界，则返回 "-1"，并抛出一个 "IndexError" 异常。
+
+   备注:
+
+     此函数会“窃取”对 *o* 的引用，并丢弃对元组中已在受影响位置的条目的
+     引用。
+
+void PyTuple_SET_ITEM(PyObject *p, Py_ssize_t pos, PyObject *o)
+
+   类似于 "PyTuple_SetItem()"，但不进行错误检查，并且应该 *只是* 被用
+   来填充全新的元组。
+
+   当 Python 以 调试模式 或 "启用断言" 构建时将把边界检测作为断言来执
+   行。
+
+   备注:
+
+     这个函数会"窃取"一个对 *o* 的引用，但是，与 "PyTuple_SetItem()"
+     不同，它 *不会* 丢弃对任何被替换项的引用；元组中位于 *pos* 位置的
+     任何引用都将被泄漏。
+
+   警告:
+
+     这个宏应该 *只* 用于新创建的元组。在一个已经在使用的元组上使用这
+     个宏（换句话说，引用计数 > 1）可能会导致未定义的行为。
+
+int _PyTuple_Resize(PyObject **p, Py_ssize_t newsize)
+
+   可以用于调整元组的大小。*newsize* 将是元组的新长度。因为元组 *被认
+   为* 是不可变的，所以只有在对象仅有一个引用时，才应该使用它。 如果元
+   组已经被代码的其他部分所引用，请不要使用此项。元组在最后总是会增长
+   或缩小。把它看作是销毁旧元组并创建一个新元组，只会更有效。成功时返
+   回 "0"。客户端代码不应假定 "*p" 的结果值将与调用此函数之前的值相同
+   。如果替换了 "*p" 引用的对象，则原始的 "*p" 将被销毁。失败时，返回
+   "-1"，将 "*p" 设置为 "NULL"，并引发 "MemoryError" 或者
+   "SystemError".
+
+
+结构序列对象
+************
+
+结构序列对象是等价于 "namedtuple()" 的 C 对象，即一个序列，其中的条目
+也可以通过属性访问。 要创建结构序列，你首先必须创建特定的结构序列类型
+。
+
+PyTypeObject *PyStructSequence_NewType(PyStructSequence_Desc *desc)
+    *返回值：新的引用。** 属于 稳定 ABI.*
+
+   根据 *desc* 中的数据创建一个新的结构序列类型，如下所述。可以使用
+   "PyStructSequence_New()" 创建结果类型的实例。
+
+   失败时返回 "NULL" 并设置一个异常。
+
+void PyStructSequence_InitType(PyTypeObject *type, PyStructSequence_Desc *desc)
+
+   从 *desc* 就地初始化结构序列类型 *type*。
+
+int PyStructSequence_InitType2(PyTypeObject *type, PyStructSequence_Desc *desc)
+
+   类似于 "PyStructSequence_InitType()"，但成功时返回 "0" 而失败时返回
+   "-1" 并设置一个异常。
+
+   Added in version 3.4.
+
+type PyStructSequence_Desc
+    * 属于 稳定 ABI （包括所有成员）.*
+
+   包含要创建的结构序列类型的元信息。
+
+   const char *name
+
+      类型的完整限定名称；使用以空值结束的 UTF-8 编码。该名称必须包含
+      模块名。
+
+   const char *doc
+
+      指向类型的文档字符串的指针或以 "NULL" 表示忽略。
+
+   PyStructSequence_Field *fields
+
+      指向以 "NULL" 结尾的数组的指针，该数组包含新类型的字段名。
+
+   int n_in_sequence
+
+      Python 端可见的字段数（如果用作元组）。
+
+type PyStructSequence_Field
+    * 属于 稳定 ABI （包括所有成员）.*
+
+   描述结构序列的一个字段。由于结构序列是以元组为模型的，因此所有字段
+   的类型都是 PyObject*。 "PyStructSequence_Desc" 的 "fields" 数组中的
+   索引决定了描述结构序列的是哪个字段。
+
+   const char *name
+
+      字段的名称或 "NULL" 表示结束已命名字段列表，设为
+      "PyStructSequence_UnnamedField" 则保持未命名状态。
+
+   const char *doc
+
+      字段文档字符串或 "NULL" 表示省略。
+
+const char *const PyStructSequence_UnnamedField
+    * 属于 稳定 ABI 自 3.11 版起.*
+
+   字段名的特殊值将保持未命名状态。
+
+   在 3.9 版本发生变更: 这个类型已从 "char *" 更改。
+
+PyObject *PyStructSequence_New(PyTypeObject *type)
+    *返回值：新的引用。** 属于 稳定 ABI.*
+
+   创建 *type* 的实例，该实例必须使用 "PyStructSequence_NewType()" 创
+   建。
+
+   失败时返回 "NULL" 并设置一个异常。
+
+PyObject *PyStructSequence_GetItem(PyObject *p, Py_ssize_t pos)
+    *返回值：借入的引用。** 属于 稳定 ABI.*
+
+   返回 *p* 所指向的结构序列中位于 *pos* 处的对象。
+
+   当 Python 以 调试模式 或 "启用断言" 构建时将把边界检测作为断言来执
+   行。
+
+PyObject *PyStructSequence_GET_ITEM(PyObject *p, Py_ssize_t pos)
+    *返回值：借入的引用。*
+
+   "PyStructSequence_GetItem()" 的别名。
+
+   在 3.13 版本发生变更: 现在被实现为 "PyStructSequence_GetItem()" 的
+   别名。
+
+void PyStructSequence_SetItem(PyObject *p, Py_ssize_t pos, PyObject *o)
+    * 属于 稳定 ABI.*
+
+   将结构序列 *p* 的索引 *pos* 处的字段设置为值 *o*。与
+   "PyTuple_SET_ITEM()" 一样，它应该只用于填充全新的实例。
+
+   当 Python 以 调试模式 或 "启用断言" 构建时将把边界检测作为断言来执
+   行。
+
+   备注:
+
+     这个函数"窃取"了一个对 *o* 的引用。
+
+void PyStructSequence_SET_ITEM(PyObject *p, Py_ssize_t *pos, PyObject *o)
+
+   "PyStructSequence_SetItem()" 的别名。
+
+   在 3.13 版本发生变更: 现在被实现为 "PyStructSequence_SetItem()" 的
+   别名。

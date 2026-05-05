@@ -1,0 +1,156 @@
+PyHash API
+**********
+
+另请参阅 "PyTypeObject.tp_hash" 成员和 数字类型的哈希运算。
+
+type Py_hash_t
+
+   哈希值类型：有符号整数。
+
+   Added in version 3.2.
+
+type Py_uhash_t
+
+   哈希值类型：无符号整数。
+
+   Added in version 3.2.
+
+Py_HASH_ALGORITHM
+
+   一个指明用于 "str", "bytes" 和 "memoryview" 的哈希算法的数字值。
+
+   算法名称由 "sys.hash_info.algorithm" 对外公开。
+
+   Added in version 3.4.
+
+Py_HASH_FNV
+Py_HASH_SIPHASH24
+Py_HASH_SIPHASH13
+
+   与 "Py_HASH_ALGORITHM" 进行比较以确定使用哪种哈希算法的数字值。哈希
+   算法可通过 "--with-hash-algorithm" 选项来配置。
+
+   Added in version 3.4: 增加 "Py_HASH_FNV" 和 "Py_HASH_SIPHASH24"。
+
+   Added in version 3.11: 增加 "Py_HASH_SIPHASH13"。
+
+Py_HASH_CUTOFF
+
+   长度在 "[1, Py_HASH_CUTOFF)" 范围内的缓冲区将使用 DJBX33A 而不是由
+   "Py_HASH_ALGORITHM" 所指定的哈希算法。
+
+   * "Py_HASH_CUTOFF" 值为 0 将禁用优化。
+
+   * "Py_HASH_CUTOFF" 必须为小于等于 7 的非负数。
+
+   32 位平台应当使用比 64 位平台更小的截断值，因为在 32 位平台上更容易
+   创建碰撞字符串。截断值在 64 位平台上为 7 而在 32 位平台上为 5 应当
+   能够提供足够的安全边界。
+
+   这对应于 "sys.hash_info.cutoff" 常量。
+
+   Added in version 3.4.
+
+PyHASH_MODULUS
+
+   梅森素数 "P = 2**n -1"，用于数字哈希方案。
+
+   这对应于 "sys.hash_info.modulus" 常量。
+
+   Added in version 3.13.
+
+PyHASH_BITS
+
+   "PyHASH_MODULUS" 中 "P" 的指数 "n"。
+
+   Added in version 3.13.
+
+PyHASH_MULTIPLIER
+
+   用于字符串和多种其他哈希算法的质数乘数。
+
+   Added in version 3.13.
+
+PyHASH_INF
+
+   针对正无穷大返回的哈希值。
+
+   这对应于 "sys.hash_info.inf" 常量。
+
+   Added in version 3.13.
+
+PyHASH_IMAG
+
+   用于复数虚部的乘数。
+
+   这对应于 "sys.hash_info.imag" 常量。
+
+   Added in version 3.13.
+
+type PyHash_FuncDef
+
+   "PyHash_GetFuncDef()" 使用的哈希函数定义。
+
+   Py_hash_t (*const hash)(const void*, Py_ssize_t)
+
+      哈希函数。
+
+   const char *name
+
+      哈希函数名称（UTF-8 编码的字符串）。
+
+      这对应于 "sys.hash_info.algorithm" 常量。
+
+   const int hash_bits
+
+      以比特位表示的哈希值内部大小。
+
+      这对应于 "sys.hash_info.hash_bits" 常量。
+
+   const int seed_bits
+
+      以比特位表示的输入种子值大小。
+
+      这对应于 "sys.hash_info.seed_bits" 常量。
+
+   Added in version 3.4.
+
+PyHash_FuncDef *PyHash_GetFuncDef(void)
+
+   获取哈希函数定义。
+
+   参见: **PEP 456** "安全且可互换的哈希算法"。
+
+   Added in version 3.4.
+
+Py_hash_t Py_HashPointer(const void *ptr)
+
+   对指针值执行哈希运算：将指针值作为整数来处理（在内部将其转换为
+   "uintptr_t" 类型）。指针不会被解引用。
+
+   此函数不会失败：它不可能返回 "-1"。
+
+   Added in version 3.13.
+
+Py_hash_t Py_HashBuffer(const void *ptr, Py_ssize_t len)
+
+   计算并返回从地址 *ptr* 开始的 *len* 字节缓冲区的哈希值。哈希保证与
+   "bytes"、"memoryview" 和其他实现 缓冲区协议 的内置对象的哈希匹配。
+
+   使用此函数为不可变对象实现哈希，这些对象的 "tp_richcompare" 函数会
+   与另一个对象的缓冲区进行比较。
+
+   *len* 必须大于或等于 "0"。
+
+   这个函数总是能够成功执行。
+
+   Added in version 3.14.
+
+Py_hash_t PyObject_GenericHash(PyObject *obj)
+
+   旨在放入类型对象的 "tp_hash" 槽位的通用哈希函数。其结果仅取决于对象
+   的标识。
+
+   在 CPython 中，它等价于 "Py_HashPointer()"。
+
+   Added in version 3.13.

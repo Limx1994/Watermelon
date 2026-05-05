@@ -1,0 +1,102 @@
+描述器对象
+**********
+
+“描述器”是描述对象的某些属性的对象。它们存在于类型对象的字典中。
+
+PyTypeObject PyProperty_Type
+    * 属于 稳定 ABI.*
+
+   内建描述器类型的类型对象。
+
+PyObject *PyDescr_NewGetSet(PyTypeObject *type, struct PyGetSetDef *getset)
+    *返回值：新的引用。** 属于 稳定 ABI.*
+
+PyObject *PyDescr_NewMember(PyTypeObject *type, struct PyMemberDef *meth)
+    *返回值：新的引用。** 属于 稳定 ABI.*
+
+PyTypeObject PyMemberDescr_Type
+    * 属于 稳定 ABI.*
+
+   基于 "PyMemberDef" 结构体创建的成员描述器对象的类型对象。这种描述器
+   将 C 结构的字段暴露为类型的属性，对应 Python 中的
+   "types.MemberDescriptorType" 对象。
+
+PyTypeObject PyGetSetDescr_Type
+    * 属于 稳定 ABI.*
+
+   基于 "PyGetSetDef" 结构体创建的 get/set 描述器对象的类型对象。这种
+   描述器实现了取值由 C getter 和 setter 函数来计算的属性，并被用于许
+   多内置类型的属性。
+
+PyObject *PyDescr_NewMethod(PyTypeObject *type, struct PyMethodDef *meth)
+    *返回值：新的引用。** 属于 稳定 ABI.*
+
+PyTypeObject PyMethodDescr_Type
+    * 属于 稳定 ABI.*
+
+   基于 "PyMethodDef" 结构体创建的方法描述器对象的类型对象。这种描述器
+   将 C 函数暴露为类型的方法，对应 Python 中的
+   "types.MemberDescriptorType" 对象。
+
+PyObject *PyDescr_NewWrapper(PyTypeObject *type, struct wrapperbase *wrapper, void *wrapped)
+    *返回值：新的引用。*
+
+PyTypeObject PyWrapperDescr_Type
+    * 属于 稳定 ABI.*
+
+   由 "PyDescr_NewWrapper()" 和 "PyWrapper_New()" 创建的包装器描述器对
+   象的类型对象。 包装器描述器在内部被用于暴露通过包装器结构体实现的特
+   殊方法，对应 Python 中的 "types.WrapperDescriptorType" 对象。
+
+PyObject *PyDescr_NewClassMethod(PyTypeObject *type, PyMethodDef *method)
+    *返回值：新的引用。** 属于 稳定 ABI.*
+
+int PyDescr_IsData(PyObject *descr)
+
+   如果描述器对象 *descr* 描述的是一个数据属性则返回非零值，或者如果它
+   描述的是一个方法则返回 "0"。 *descr* 必须是一个描述器对象；不会进行
+   错误检查。
+
+PyObject *PyWrapper_New(PyObject*, PyObject*)
+    *返回值：新的引用。** 属于 稳定 ABI.*
+
+
+内置描述器
+==========
+
+PyTypeObject PySuper_Type
+    * 属于 稳定 ABI.*
+
+   super 对象的类型对象。它与 Python 层面的 "super" 是相同的对象。
+
+PyTypeObject PyClassMethod_Type
+
+   类方法对象的类型。它与 Python 层面的 "classmethod" 是相同的对象。
+
+PyTypeObject PyClassMethodDescr_Type
+    * 属于 稳定 ABI.*
+
+   C 层级类方法描述器对象的类型对象。这是针对在 C 扩展类型中定义的
+   "classmethod()" 创建的描述器的类型，与 Python 中的 "classmethod" 是
+   同一对象。
+
+PyObject *PyClassMethod_New(PyObject *callable)
+
+   新建一个包裹 *callable* 的 "classmethod" 对象。*callable* 必须是一
+   个可调用对象，并且不可为 "NULL" 值。
+
+   成功时，此函数将返回一个指向新类方法描述器的 *strong reference*。失
+   败时，此函数将返回 "NULL" 并设置一个异常。
+
+PyTypeObject PyStaticMethod_Type
+
+   静态方法对象的类型。它与 Python 层面的 "staticmethod" 是相同的对象
+   。
+
+PyObject *PyStaticMethod_New(PyObject *callable)
+
+   新建一个包裹 *callable* 的 "staticmethod" 对象。*callable* 必须是一
+   个可调用对象，并且不可为 "NULL" 值。
+
+   成功时，此函数将返回一个指向新静态方法描述器的 *strong reference*。
+   失败时，此函数将返回 "NULL" 并设置一个异常。

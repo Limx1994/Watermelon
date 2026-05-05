@@ -1,0 +1,86 @@
+反射
+****
+
+PyObject *PyEval_GetBuiltins(void)
+    *返回值：借入的引用。** 属于 稳定 ABI.*
+
+   自 3.13 版本弃用: 使用 "PyEval_GetFrameBuiltins()" 代替。
+
+   返回当前执行帧中内置对象的字典，如果当前没有帧正在执行，则返回线程
+   状态的解释器中的内置对象字典。
+
+PyObject *PyEval_GetLocals(void)
+    *返回值：借入的引用。** 属于 稳定 ABI.*
+
+   自 3.13 版本弃用: 使用 "PyEval_GetFrameLocals()" 来获取与在 Python
+   代码中调用 "locals()" 相同的行为，或者是在 "PyEval_GetFrame()" 的结
+   果上调用 "PyFrame_GetLocals()" 来访问当前执行帧的 "f_locals" 属性。
+
+   返回一个提供对当前执行帧中局部变量访问的映射，或者如果没有当前执行
+   帧则返回 "NULL"。
+
+   请参考 "locals()" 了解在不同作用域下返回的映射的详情。
+
+   由于此函数会返回一个 *borrowed reference*，为 *已优化作用域* 返回的
+   字典将缓存在帧对象上因此会在帧对象存活期间保持存活。不同于
+   "PyEval_GetFrameLocals()" 和 "locals()"，在相同帧中对该函数的后续调
+   用将会更新已缓存字典的内容以反映局部变量状态的变化而不是返回一个新
+   的快照。
+
+   在 3.13 版本发生变更: 作为 **PEP 667** 的一部分，
+   "PyFrame_GetLocals()", "locals()" 和 "FrameType.f_locals" 将不再使
+   用共享的缓存字典。请参阅 有什么新变化条目 了解详情。
+
+PyObject *PyEval_GetGlobals(void)
+    *返回值：借入的引用。** 属于 稳定 ABI.*
+
+   自 3.13 版本弃用: 使用 "PyEval_GetFrameGlobals()" 代替。
+
+   返回当前执行帧中全局变量的字典，如果没有当前执行的帧则返回 "NULL"。
+
+PyFrameObject *PyEval_GetFrame(void)
+    *返回值：借入的引用。** 属于 稳定 ABI.*
+
+   返回 *已附加的线程状态* 的帧，如果当前没有帧正在执行则为 "NULL"。
+
+   另请参阅 "PyThreadState_GetFrame()"。
+
+PyObject *PyEval_GetFrameBuiltins(void)
+    *返回值：新的引用。** 属于 稳定 ABI 自 3.13 版起.*
+
+   返回当前执行帧中内置对象的字典，如果当前没有帧正在执行，则返回线程
+   状态的解释器中的内置对象字典。
+
+   Added in version 3.13.
+
+PyObject *PyEval_GetFrameLocals(void)
+    *返回值：新的引用。** 属于 稳定 ABI 自 3.13 版起.*
+
+   返回当前执行帧中局部变量的字典，或者如果没有当前执行帧则返回 "NULL"
+   。等价于在 Python 代码中调用 "locals()"。
+
+   要访问当前帧上的 "f_locals" 而不会在 *已优化作用域* 中生成独立的快
+   照，可以在 "PyEval_GetFrame()" 的结果上调用 "PyFrame_GetLocals()"。
+
+   Added in version 3.13.
+
+PyObject *PyEval_GetFrameGlobals(void)
+    *返回值：新的引用。** 属于 稳定 ABI 自 3.13 版起.*
+
+   返回当前执行帧中全局变量的字典，或者如果没有当前执行帧则返回 "NULL"
+   。等价于在 Python 代码中调用 "globals()"。
+
+   Added in version 3.13.
+
+const char *PyEval_GetFuncName(PyObject *func)
+    * 属于 稳定 ABI.*
+
+   如果 *func* 是函数、类或实例对象，则返回它的名称，否则返回 *func*
+   的类型的名称。
+
+const char *PyEval_GetFuncDesc(PyObject *func)
+    * 属于 稳定 ABI.*
+
+   根据 *func* 的类型返回描述字符串。返回值包括函数和方法的 "()", "
+   constructor", " instance" 和 " object"。与 "PyEval_GetFuncName()"
+   的结果连接，结果将是 *func* 的描述。

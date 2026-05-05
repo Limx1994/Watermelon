@@ -1,0 +1,26 @@
+"tkinter.scrolledtext" --- 滚动文本控件
+***************************************
+
+**源代码：** Lib/tkinter/scrolledtext.py
+
+======================================================================
+
+"tkinter.scrolledtext" 模块提供了一个同名类，实现了一个基本的文本控件
+并带有配置好的垂直滚动条。使用 "ScrolledText" 类比直接设置文本控件和滚
+动条要容易得多。
+
+文本控件与滚动条打包在一个 "Frame" 中，"Grid" 和 "Pack" 布局管理器的方
+法从 "Frame" 对象中获得。这使得 "ScrolledText" 控件可以直接用于实现大
+多数常规的布局管理行为。
+
+如果需要更具体的控制，可以使用以下属性：
+
+class tkinter.scrolledtext.ScrolledText(master=None, **kw)
+
+   frame
+
+      围绕文本和滚动条控件的框架。
+
+   vbar
+
+      滚动条控件。

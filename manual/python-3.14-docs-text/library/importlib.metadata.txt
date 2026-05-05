@@ -1,0 +1,478 @@
+"importlib.metadata" -- 访问软件包元数据
+****************************************
+
+Added in version 3.8.
+
+在 3.10 版本发生变更: "importlib.metadata" 不再是暂定的。
+
+**源代码:** Lib/importlib/metadata/__init__.py
+
+"importlib.metadata" 是一个提供对已安装的 分发包 的元数据的访问的库，
+如其入口点或其顶层名称 (导入包，模块等，如果有的话)。 这个库部分构建于
+Python 的导入系统之上，其目标是取代 "pkg_resources" 的 entry point API
+和 metadata API 中的类似功能。 配合 "importlib.resources"，这个包让使
+用较老旧且低效率的 "pkg_resources" 包不再必要。
+
+"importlib.metadata" 对 pip 等工具安装到 Python 的 "site-packages" 目
+录的第三方 *分发包* 进行操作。 具体来说，适用的分发包应带有可发现的
+"dist-info" 或 "egg-info" 目录，以及 核心元数据规范说明 定义的元数据。
+
+重要:
+
+  它们 *不一定* 等同或 1:1 对应于可在 Python 代码中导入的顶层 *导入包*
+  名称。一个 *分发包* 可以包含多个 *导入包* (和单个模块)，如果是命名空
+  间包，一个顶层 *导入包* 可以映射到多个 *分发包*。您可以使用
+  packages_distributions() 来获取它们之间的映射。
+
+在默认情况下，分发包元数据可存在于 "sys.path" 下的文件系统或 zip 归档
+文件中。 通过一个扩展机制，元数据可以存在于几乎任何地方。
+
+参见:
+
+  https://importlib-metadata.readthedocs.io/
+     "importlib_metadata" 的文档，它向下移植了 "importlib.metadata"。
+     它包含该模块的类和函数的 API 参考，以及针对 "pkg_resources" 现有
+     用户的 迁移指南。
+
+
+概述
+====
+
+让我们假设你想要获取你使用 "pip" 安装的 分发包 的版本字符串。 我们首先
+创建一个虚拟环境并在其安装一些软件包：
+
+   $ python -m venv example
+   $ source example/bin/activate
+   (example) $ python -m pip install wheel
+
+你可以通过运行以下代码得到 "wheel" 的版本字符串：
+
+   (example) $ python
+   >>> from importlib.metadata import version
+   >>> version('wheel')
+   '0.32.3'
+
+你还能获取可通过 EntryPoint 的属性 (通常为 'group' 或 'name') 来选择的
+入口点多项集，比如 "console_scripts", "distutils.commands" 等等。 每个
+group 都包含一个 EntryPoint 对象的多项集。
+
+你可以获得 分发的元数据:
+
+   >>> list(metadata('wheel'))
+   ['Metadata-Version', 'Name', 'Version', 'Summary', 'Home-page', 'Author', 'Author-email', 'Maintainer', 'Maintainer-email', 'License', 'Project-URL', 'Project-URL', 'Project-URL', 'Keywords', 'Platform', 'Classifier', 'Classifier', 'Classifier', 'Classifier', 'Classifier', 'Classifier', 'Classifier', 'Classifier', 'Classifier', 'Classifier', 'Classifier', 'Classifier', 'Requires-Python', 'Provides-Extra', 'Requires-Dist', 'Requires-Dist']
+
+你也可以获得 分发包的版本号，列出它的 构成文件，并且得到分发包的 分发
+包的依赖 列表。
+
+exception importlib.metadata.PackageNotFoundError
+
+   当查询未在当前 Python 环境中安装的分发包时由此模块的某些函数所引发
+   的 "ModuleNotFoundError" 子类。
+
+
+函数式 API
+==========
+
+这个包的公开 API 提供了以下功能。
+
+
+入口点
+------
+
+importlib.metadata.entry_points(**select_params)
+
+   返回一个描述当前环境的入口点的 "EntryPoints" 实例。 所给出的任何关
+   键字形参都将被传给 "select()" 方法以与单独的入口点定义的属性进行比
+   较。
+
+   注意：目前无法基于 "EntryPoint.dist" 属性来查询入口点（因为不同的
+   "Distribution" 实例目前不可能相等，即使它们具有相同的属性）
+
+class importlib.metadata.EntryPoints
+
+   已安装入口点多项集的详情。
+
+   还提供 ".groups" 属性用于报告所有已标识的入口点分组，以及 ".names"
+   属性用于报告所有已标识的入口点名称。
+
+class importlib.metadata.EntryPoint
+
+   一个已安装入口点的详情。
+
+   每个 "EntryPoint" 实例都有 ".name", ".group" 和 ".value" 属性以及
+   ".load()" 方法用于求值。 此外还有 ".module", ".attr" 和 ".extras"
+   属性用于获取 ".value" 属性的组成部分，以及 ".dist" 用于获取有关提供
+   该入口点的分发包的信息。
+
+查询所有的入口点:
+
+   >>> eps = entry_points()
+
+"entry_points()" 函数返回一个 "EntryPoints" 对象，即由带 "names" 和
+"groups" 属性的所有 "EntryPoint" 对象组成的多项集以方便使用:
+
+   >>> sorted(eps.groups)
+   ['console_scripts', 'distutils.commands', 'distutils.setup_keywords', 'egg_info.writers', 'setuptools.installation']
+
+"EntryPoints" 具有 "select()" 方法用于选择匹配指定特征属性的入口点。
+如选择 "console_scripts" 组中的入口点:
+
+   >>> scripts = eps.select(group='console_scripts')
+
+效果相同，因为 "entry_points()" 会传递关键字参数来选择:
+
+   >>> scripts = entry_points(group='console_scripts')
+
+选出命名为 "wheel" 的特定脚本（可以在 wheel 项目中找到）:
+
+   >>> 'wheel' in scripts.names
+   True
+   >>> wheel = scripts['wheel']
+
+等价地，在选择过程中查询对应的入口点:
+
+   >>> (wheel,) = entry_points(group='console_scripts', name='wheel')
+   >>> (wheel,) = entry_points().select(group='console_scripts', name='wheel')
+
+检查解析得到的入口点:
+
+   >>> wheel
+   EntryPoint(name='wheel', value='wheel.cli:main', group='console_scripts')
+   >>> wheel.module
+   'wheel.cli'
+   >>> wheel.attr
+   'main'
+   >>> wheel.extras
+   []
+   >>> main = wheel.load()
+   >>> main
+   <function main at 0x103528488>
+
+"group" 和 "name" 是由软件包作者定义的任意值并且通常来说客户端会想要解
+析特定 group 的所有入口点。 请参阅 setuptools 文档 了解有关入口点及其
+定义和用法的详情。
+
+在 3.12 版本发生变更: "selectable" 入口点是在 "importlib_metadata" 3.6
+和 Python 3.10 中引入的。 在这项改变之前，"entry_points" 不接受任何形
+参并且总是返回一个由入口点组成的字典，字典的键为分组名。 在
+"importlib_metadata" 5.0 和 Python 3.12 中，"entry_points" 总是返回一
+个 "EntryPoints" 对象。 请参阅 backports.entry_points_selectable 了解
+相关兼容性选项。
+
+在 3.13 版本发生变更: "EntryPoint" 对象不再提供类似于元组的接口
+("__getitem__()")。
+
+
+分发的元数据
+------------
+
+importlib.metadata.metadata(distribution_name)
+
+   将对应于指定分发包的分发元数据作为 "PackageMetadata" 实例返回。
+
+   如果指定的分发包未在当前 Python 环境中安装则会引发
+   "PackageNotFoundError"。
+
+class importlib.metadata.PackageMetadata
+
+   PackageMetadata 协议 的一个具体实现。
+
+   除了提供已定义的协议方法和属性，对实例的下标操作就相当于调用
+   "get()" 方法。
+
+每个 分发包 都包括一些元数据，你可以使用 "metadata()" 函数来获取:
+
+   >>> wheel_metadata = metadata('wheel')
+
+所返回数据结构的键指明了元数据关键字，而值将从分发的元数据中不加解析地
+返回:
+
+   >>> wheel_metadata['Requires-Python']
+   '>=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*'
+
+"PackageMetadata" 也还提供了一个按照 **PEP 566** 将所有元数据以 JSON
+兼容形式返回的 "json":
+
+   >>> wheel_metadata.json['requires_python']
+   '>=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*'
+
+此处并未描述可用元数据的完整集合。 更多详情参见 PyPA 核心元数据规格说
+明。
+
+在 3.10 版本发生变更: 当有效载荷中包含时，"Description" 以去除续行符的
+形式被包含于元数据中。添加了 "json" 属性。
+
+
+分发包的版本
+------------
+
+importlib.metadata.version(distribution_name)
+
+   返回对应指定分发包的已安装分发包 版本。
+
+   如果指定的分发包未在当前 Python 环境中安装则会引发
+   "PackageNotFoundError"。
+
+"version()" 函数是获取字符串形式的 分发包 版本号的最快速方式:
+
+   >>> version('wheel')
+   '0.32.3'
+
+
+分发包的文件
+------------
+
+importlib.metadata.files(distribution_name)
+
+   返回包含在指定分发包内的完整文件集合。
+
+   如果指定的分发包未在当前 Python 环境中安装则会引发
+   "PackageNotFoundError"。
+
+   如果找到了分发包但未找到报告与分发包相关联的文件的安装数据库记录则
+   返回 "None"。
+
+class importlib.metadata.PackagePath
+
+   一个 "pathlib.PurePath" 的派生对象，增加了对应于指定文件的分发包的
+   安装元数据的 "dist", "size" 和 "hash" 特征属性。
+
+"files()" 函数接受一个 分发包 名称并返回此分发包所安装的全部文件。 每
+个文件均报告为一个 "PackagePath" 实例。 例如:
+
+   >>> util = [p for p in files('wheel') if 'util.py' in str(p)][0]
+   >>> util
+   PackagePath('wheel/util.py')
+   >>> util.size
+   859
+   >>> util.dist
+   <importlib.metadata._hooks.PathDistribution object at 0x101e0cef0>
+   >>> util.hash
+   <FileHash mode: sha256 value: bYkw5oMccfazVCoYQwKkkemoVyMAFoR34mmKBx8R1NI>
+
+当你获得了文件对象，你也可以读取其内容:
+
+   >>> print(util.read_text())
+   import base64
+   import sys
+   ...
+   def as_bytes(s):
+       if isinstance(s, text_type):
+           return s.encode('utf-8')
+       return s
+
+你也可以使用 "locate()" 方法来获取文件的绝对路径:
+
+   >>> util.locate()
+   PosixPath('/home/gustav/example/lib/site-packages/wheel/util.py')
+
+对于列出文件的元数据文件 ("RECORD" 或 "SOURCES.txt") 缺失的情况，
+"files()" 将返回 "None"。 调用者可能会想要把对 "files()" 的调用包装在
+always_iterable 中或是用其他方式在尚未知晓目标分发元数据存在性时应对此
+情况。
+
+
+分发包的依赖
+------------
+
+importlib.metadata.requires(distribution_name)
+
+   返回指定分发包已声明的依赖描述。
+
+   如果指定的分发包未在当前 Python 环境中安装则会引发
+   "PackageNotFoundError"。
+
+要获取一个 分发包 的完整需求集，请使用 "requires()" 函数:
+
+   >>> requires('wheel')
+   ["pytest (>=3.0.0) ; extra == 'test'", "pytest-cov ; extra == 'test'"]
+
+
+将导入映射到分发包
+------------------
+
+importlib.metadata.packages_distributions()
+
+   返回一个从最高层级模块和通过 "sys.meta_path" 找到的导入包名称到提供
+   相应文件的分发包名称（如果存在）的映射。
+
+   为了允许使用命名空间包（它可能包含由多个分发包所提供的成员），每个
+   最高层级导入名称都映射到一个分发名称的列表而不是直接映射单个名称。
+
+解析每个提供可导入的最高层级 Python 模块或 导入包 对应的 分发包 名称（
+对于命名空间包可能有多个名称）的快捷方法:
+
+   >>> packages_distributions()
+   {'importlib_metadata': ['importlib-metadata'], 'yaml': ['PyYAML'], 'jaraco': ['jaraco.classes', 'jaraco.functools'], ...}
+
+某些可编辑的安装 没有提供最高层级名称，因而此函数不适用于这样的安装。
+
+Added in version 3.10.
+
+
+分发包对象
+==========
+
+importlib.metadata.distribution(distribution_name)
+
+   返回一个描述指定分发包的 "Distribution" 实例。
+
+   如果指定的分发包未在当前 Python 环境中安装则会引发
+   "PackageNotFoundError"。
+
+class importlib.metadata.Distribution
+
+   一个已安装分发包的详情。
+
+   注意：目前不同的 "Distribution" 实例在比较时不会相等，即使它们是关
+   联到相同的已安装分发包因而具有相同的属性。
+
+虽然上面描述的模块级 API 是最常见且便捷的用法，但你也可以从
+"Distribution" 类获取所有信息。 "Distribution" 是一个代表 Python 分发
+包 元数据的抽象对象。 你可以通过调用 "distribution()" 函数来获取对应某
+个已安装分发包的具体 "Distribution" 子类实例:
+
+   >>> from importlib.metadata import distribution
+   >>> dist = distribution('wheel')
+   >>> type(dist)
+   <class 'importlib.metadata.PathDistribution'>
+
+因此，一个获取版本号的替代方式是通过 "Distribution" 实例:
+
+   >>> dist.version
+   '0.32.3'
+
+在 "Distribution" 实例上提供了所有类别的附加元数据:
+
+   >>> dist.metadata['Requires-Python']
+   '>=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*'
+   >>> dist.metadata['License']
+   'MIT'
+
+对于可编辑包，"origin" 属性可能表示 **PEP 610** 元数据:
+
+   >>> dist.origin.url
+   'file:///path/to/wheel-0.32.3.editable-py3-none-any.whl'
+
+此处并未描述可用元数据的完整集合。 更多详情参见 PyPA 核心元数据规格说
+明。
+
+Added in version 3.13: 增加了 ".origin" 特征属性。
+
+
+分发包的发现
+============
+
+在默认情况下，这个包针对文件系统和 zip 文件 分发包 的元数据发现提供了
+内置支持。 这个元数据查找器的搜索目标默认为 "sys.path"，但它对来自其他
+导入机制行为方式的解读会略有变化。 特别地:
+
+* "importlib.metadata" 不会识别 "sys.path" 上的 "bytes" 对象。
+
+* "importlib.metadata" 将顺带识别 "sys.path" 上的 "pathlib.Path" 对象
+  ，即使这些值会被导入操作所忽略。
+
+
+实现自定义 Provider
+===================
+
+"importlib.metadata" 会处理两种 API 表层，一个用于 *消费方* 而另一个用
+于 *供给方*。 大部分用户属于消费方，他们将消费由软件包提供的元数据。
+不过也存在其他的用例，其中的用户会想要通过某些其他机制来暴露元数据，比
+如配合自定义的导入器。 这样的用例就需要 *自定义供给方*。
+
+由于 分发包 元数据不能通过 "sys.path" 搜索或是直接通过包加载器来获得，
+一个分发包的元数据是通过导入系统的 查找器 来找到的。 要找到分发包的元
+数据，"importlib.metadata" 会在 "sys.meta_path" 上查询 *元路径查找器*
+的列表。
+
+该实现具有集成到 "PathFinder" 中的钩子，为在文件系统中找到的分发包提供
+元数据。
+
+抽象基类 "importlib.abc.MetaPathFinder" 定义了 Python 导入系统期望的查
+找器接口。 "importlib.metadata" 通过寻找 "sys.meta_path" 上查找器可选
+的 "find_distributions" 可调用的属性扩展这个协议，并将这个扩展接口作为
+"DistributionFinder" 抽象基类提供，它定义了这个抽象方法:
+
+   @abc.abstractmethod
+   def find_distributions(context=DistributionFinder.Context()) -> Iterable[Distribution]:
+       """返回一个由所有能够为指定 ``context`` 加载包的元数据的
+       Distribution 实例组成的可迭代对象。
+       """
+
+"DistributionFinder.Context" 对象提供了指示搜索路径和匹配名称的属性
+".path" 和 ".name" 并可能提供其他的由消费方查找的相关上下文。
+
+在实践中，为了支持在文件系统以外的其他位置查找分发包的元数据，可以子类
+化 "Distribution" 并实现其抽象方法。 然后从一个自定义查找器的
+"find_distributions()" 方法返回这个派生的 "Distribution" 的实例。
+
+
+示例
+----
+
+设想一个从数据库中加载 Python 模块的自定义查找器:
+
+   class DatabaseImporter(importlib.abc.MetaPathFinder):
+       def __init__(self, db):
+           self.db = db
+
+       def find_spec(self, fullname, target=None) -> ModuleSpec:
+           return self.db.spec_from_name(fullname)
+
+   sys.meta_path.append(DatabaseImporter(connect_db(...)))
+
+该导入器现在大概可以从数据库中导入模块，但它不提供元数据或入口点。这个
+自定义导入器如果要提供元数据，它还需要实现 "DistributionFinder":
+
+   from importlib.metadata import DistributionFinder
+
+   class DatabaseImporter(DistributionFinder):
+       ...
+
+       def find_distributions(self, context=DistributionFinder.Context()):
+           query = dict(name=context.name) if context.name else {}
+           for dist_record in self.db.query_distributions(query):
+               yield DatabaseDistribution(dist_record)
+
+这样一来，"query_distributions" 就会返回数据库中与查询匹配的每个分发包
+的记录。例如，如果数据库中有 "requests-1.0"，"find_distributions" 就会
+为 "Context(name='requests')" 或 "Context(name=None)" 产生
+"DatabaseDistribution"。
+
+为简单起见，本例忽略了 "context.path"。"path" 属性默认为 "sys.path"，
+是搜索中考虑的导入路径集。一个 "DatabaseImporter" 可以在不考虑搜索路径
+的情况下运作。假设导入器不进行分区，那么 "path" 就无关紧要了。为了说明
+"path" 的作用，示例需要展示一个更复杂的 "DatabaseImporter"，它的行为随
+"sys.path"/"PYTHONPATH" 而变化。在这种情况下，"find_distributions" 应
+该尊重 "context.path"，并且只产生与该路径相关的 "Distribution"。
+
+那么，"DatabaseDistribution" 看起来就像是这样:
+
+   class DatabaseDistribution(importlib.metadata.Distribution):
+       def __init__(self, record):
+           self.record = record
+
+       def read_text(self, filename):
+           """
+           读取当前分发包的某个文件，如 "METADATA"。
+           """
+           if filename == "METADATA":
+               return f"""Name: {self.record.name}
+   Version: {self.record.version}
+   """
+           if filename == "entry_points.txt":
+               return "\n".join(
+                 f"""[{ep.group}]\n{ep.name}={ep.value}"""
+                 for ep in self.record.entry_points)
+
+       def locate_file(self, path):
+           raise RuntimeError("This distribution has no file system")
+
+这个基本实现应当为由 "DatabaseImporter" 进行服务的包提供元数据和入口点
+，假定 "record" 提供了适当的 ".name", ".version" 和 ".entry_points" 属
+性。
+
+"DatabaseDistribution" 还可能提供其他元数据文件，比如 "RECORD" (对
+"Distribution.files" 来说需要) 或重写 "Distribution.files" 的实现。 请
+参看源代码深入了解。

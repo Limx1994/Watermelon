@@ -1,0 +1,166 @@
+Allocating objects on the heap
+******************************
+
+PyObject *_PyObject_New(PyTypeObject *type)
+    *返回值：新的引用。*
+
+PyVarObject *_PyObject_NewVar(PyTypeObject *type, Py_ssize_t size)
+    *返回值：新的引用。*
+
+PyObject *PyObject_Init(PyObject *op, PyTypeObject *type)
+    *返回值：借入的引用。** 属于 稳定 ABI.*
+
+   为新分配的对象 *op* 初始化它的类型和初始引用。返回初始化后的对象。
+   对象的其他字段不会被初始化。虽然被如此命名，但该函数与对象的
+   "__init__()" 方法 ("tp_init" 槽位) 无关。 具体而言，该函数 **不会**
+   调用对象的 "__init__()" 方法。
+
+   一般来说，可将该函数视为一个低层级的例程。如有可能请使用 "tp_alloc"
+   。要为你的类型实现 "tp_alloc"，推荐使用 "PyType_GenericAlloc()" 或
+   "PyObject_New()" 函数。
+
+   备注:
+
+     该函数只初始化与初始 "PyObject" 结构体相对应的对象内存。它不会为
+     其余内存写入零值。
+
+PyVarObject *PyObject_InitVar(PyVarObject *op, PyTypeObject *type, Py_ssize_t size)
+    *返回值：借入的引用。** 属于 稳定 ABI.*
+
+   它的功能和 "PyObject_Init()" 一样，并且会初始化变量大小对象的长度信
+   息。
+
+   备注:
+
+     该函数只初始化对象的部分内存。它不会为其余内存写入零值。
+
+PyObject_New(TYPE, typeobj)
+
+   使用 C 结构类型 *TYPE* 和 Python 类型对象 *typeobj*
+   ("PyTypeObject*") 分配一个新的 Python 对象，通过调用
+   "PyObject_Malloc()" 来分配内存并像 "PyObject_Init()" 那样对其进行初
+   始化。 调用方将拥有对该对象的唯一引用（即其引用计数将为一）。
+
+   请避免直接调用此函数为对象分配内存；而应调用类型的 "tp_alloc" 槽位
+   。
+
+   在填充类型的 "tp_alloc" 槽位时，推荐使用 "PyType_GenericAlloc()" 而
+   不是使用简单调用此宏的自定义函数。
+
+   这个宏不会调用 "tp_alloc", "tp_new" ("__new__()") 或 "tp_init"
+   ("__init__()") 方法。
+
+   这不能被用于在 "tp_flags" 中设置了 "Py_TPFLAGS_HAVE_GC" 的对象；请
+   改用 "PyObject_GC_New"。
+
+   由此宏分配的内存必须用 "PyObject_Free()" 来释放（一般是通过对象的
+   "tp_free" 槽位进行调用）。
+
+   备注:
+
+     返回的内存并不保证在其初始化之前被完全置为零值。
+
+   备注:
+
+     此宏并不会构造给定类型的完全初始化的对象；它只是分配内存并准备好
+     由 "tp_init" 来进一步初始化。要构造完全初始化的对象，应改为调用
+     *typeobj*。例如:
+
+        PyObject *foo = PyObject_CallNoArgs((PyObject *)&PyFoo_Type);
+
+   参见:
+
+     * "PyObject_Free()"
+
+     * "PyObject_GC_New"
+
+     * "PyType_GenericAlloc()"
+
+     * "tp_alloc"
+
+PyObject_NewVar(TYPE, typeobj, size)
+
+   与 "PyObject_New" 相似，但：
+
+   * 它将分配足够容纳 *TYPE* 结构加上由 *typeobj* 的 "tp_itemsize" 字
+     段所给出的大小的 *size* ("Py_ssize_t") 个字段的内存。
+
+   * 该内存将像 "PyObject_InitVar()" 一样被初始化。
+
+   这适用于实现像元组那样的对象，它能够在构造时确定其大小。将字段数组
+   嵌入到同一分配块中可减少分配次数，从而提高内存管理效率。
+
+   请避免直接调用此函数为对象分配内存；而应调用类型的 "tp_alloc" 槽位
+   。
+
+   在填充类型的 "tp_alloc" 槽位时，推荐使用 "PyType_GenericAlloc()" 而
+   不是使用简单调用此宏的自定义函数。
+
+   这不能被用于在 "tp_flags" 中设置了 "Py_TPFLAGS_HAVE_GC" 的对象；请
+   改用 "PyObject_GC_NewVar"。
+
+   由此函数分配的内存必须用 "PyObject_Free()" 来释放（一般是通过对象的
+   "tp_free" 槽位进行调用）。
+
+   备注:
+
+     返回的内存并不保证在其初始化之前被完全置为零值。
+
+   备注:
+
+     此宏并不会构造给定类型的完全初始化的对象；它只是分配内存并准备好
+     由 "tp_init" 来进一步初始化。要构造完全初始化的对象，应改为调用
+     *typeobj*。例如:
+
+        PyObject *list_instance = PyObject_CallNoArgs((PyObject *)&PyList_Type);
+
+   参见:
+
+     * "PyObject_Free()"
+
+     * "PyObject_GC_NewVar"
+
+     * "PyType_GenericAlloc()"
+
+     * "tp_alloc"
+
+PyObject _Py_NoneStruct
+
+   在 Python 中表现为 "None" 的对象。只应通过 "Py_None" 宏来访问它，该
+   宏的求值结果为指向该对象的指针。
+
+参见:
+
+  模块对象
+     分配内存和创建扩展模块
+
+
+Soft-deprecated aliases
+=======================
+
+自 3.10 版起已处于 Soft deprecated 状态.
+
+These are aliases to existing functions and macros. They exist solely
+for backwards compatibility.
+
++----------------------------------------------------+----------------------------------------------------+
+| Soft-deprecated alias                              | 函数                                               |
+|====================================================|====================================================|
+| PyObject_NEW(type, typeobj)                        | "PyObject_New"                                     |
++----------------------------------------------------+----------------------------------------------------+
+| PyObject_NEW_VAR(type, typeobj, n)                 | "PyObject_NewVar"                                  |
++----------------------------------------------------+----------------------------------------------------+
+| PyObject_INIT(op, typeobj)                         | "PyObject_Init()"                                  |
++----------------------------------------------------+----------------------------------------------------+
+| PyObject_INIT_VAR(op, typeobj, n)                  | "PyObject_InitVar()"                               |
++----------------------------------------------------+----------------------------------------------------+
+| PyObject_MALLOC(n)                                 | "PyObject_Malloc()"                                |
++----------------------------------------------------+----------------------------------------------------+
+| PyObject_REALLOC(p, n)                             | "PyObject_Realloc()"                               |
++----------------------------------------------------+----------------------------------------------------+
+| PyObject_FREE(p)                                   | "PyObject_Free()"                                  |
++----------------------------------------------------+----------------------------------------------------+
+| PyObject_DEL(p)                                    | "PyObject_Free()"                                  |
++----------------------------------------------------+----------------------------------------------------+
+| PyObject_Del(p)                                    | "PyObject_Free()"                                  |
++----------------------------------------------------+----------------------------------------------------+

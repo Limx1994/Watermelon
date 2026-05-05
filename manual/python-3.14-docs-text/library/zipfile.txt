@@ -1,0 +1,857 @@
+"zipfile" --- 操作 ZIP 归档文件
+*******************************
+
+**源代码:** Lib/zipfile/
+
+======================================================================
+
+ZIP 文件格式是一个常用的归档与压缩标准。 这个模块提供了创建、读取、写
+入、添加及列出 ZIP 文件的工具。 任何对此模块的进阶使用都将需要理解此格
+式，其定义参见 PKZIP 应用程序笔记。
+
+此模块不能处理多部分 ZIP 文件。 它可以处理使用 ZIP64 扩展（即大小超过
+4 GiB 的 ZIP 文件）的 ZIP 文件。 它支持解密 ZIP 归档中的加密文件，但它
+不能创建加密文件。 解密非常之慢因为它是用原生 Python 而非 C 来实现的。
+
+处理压缩归档文件需要一些 *可选模块* 如 "zlib", "bz2", "lzma" 和
+"compression.zstd"。 如果它们当中的任何一个在你的 CPython 副本中缺失，
+请查看你的发行方（也就是说，向你提供 Python 的人）。 如果你就是发行方
+，请参阅 针对可选模块的要求。
+
+这个模块定义了以下内容：
+
+exception zipfile.BadZipFile
+
+   为损坏的 ZIP 文件抛出的错误。
+
+   Added in version 3.2.
+
+exception zipfile.BadZipfile
+
+   "BadZipFile" 的别名，与旧版本 Python 保持兼容性。
+
+   自 3.2 版本弃用.
+
+exception zipfile.LargeZipFile
+
+   当 ZIP 文件需要 ZIP64 功能但是未启用时会抛出此错误。
+
+class zipfile.ZipFile
+
+   用于读写 ZIP 文件的类。 欲了解构造函数的描述，参阅段落 ZipFile 对象
+   。
+
+class zipfile.Path
+
+   实现了 "pathlib.Path" 所提供接口的一个子集的类，包括完整的
+   "importlib.resources.abc.Traversable" 接口。
+
+   Added in version 3.8.
+
+class zipfile.PyZipFile
+
+   用于创建包含 Python 库的 ZIP 归档的类。
+
+class zipfile.ZipInfo(filename='NoName', date_time=(1980, 1, 1, 0, 0, 0))
+
+   用来表示归档中一个成员信息的类。 这个类的实例由 "ZipFile" 对象的
+   "getinfo()" 和 "infolist()" 方法返回。 大多数 "zipfile" 模块的用户
+   不需要创建这些实例，只需使用此模块所创建的实例即可。 *filename* 应
+   当是归档成员的完整名称，*date_time* 应当是一个包含六个字段的元组用
+   来描述文件最后一次修改的时间；这些字段的描述见 ZipInfo 对象 章节。
+
+   在 3.13 版本发生变更: 增加了公有的 "compress_level" 属性来暴露之前
+   被保护的 "_compresslevel"。 较旧的被保护名称可继续作为保持向下兼容
+   性的特征属性使用。
+
+   _for_archive(archive)
+
+      将日期时间、压缩属性和外部属性求解为 "ZipFile.writestr()" 所使用
+      的适当默认值。
+
+      返回自身用于链式操作。
+
+      Added in version 3.14.
+
+zipfile.is_zipfile(filename)
+
+   根据文件的 Magic Number，如果 *filename* 是一个有效的 ZIP 文件则返
+   回 "True"，否则返回 "False"。 *filename* 也可能是一个文件或类文件对
+   象。
+
+   在 3.1 版本发生变更: 支持文件或类文件对象。
+
+zipfile.ZIP_STORED
+
+   未被压缩的归档成员的数字常数。
+
+zipfile.ZIP_DEFLATED
+
+   常用的 ZIP 压缩方法的数字常数。需要 "zlib" 模块。
+
+zipfile.ZIP_BZIP2
+
+   BZIP2 压缩方法的数字常数。需要 "bz2" 模块。
+
+   Added in version 3.3.
+
+zipfile.ZIP_LZMA
+
+   LZMA 压缩方法的数字常数。需要 "lzma" 模块。
+
+   Added in version 3.3.
+
+zipfile.ZIP_ZSTANDARD
+
+   Zstandard 压缩的数字常量。 需要 "compression.zstd" 模块。
+
+   备注:
+
+     在 APPNOTE 6.3.7 中，方法 ID "20" 被分配给 Zstandard 压缩。 这在
+     APPNOTE 6.3.8 中被改为方法 ID "93" 以避免冲突，方法 ID "20" 则被
+     弃用。 为保持兼容性，"zipfile" 模块会同时读取这两个方法 ID 但将只
+     以方法 ID "93" 写入数据。
+
+   Added in version 3.14.
+
+备注:
+
+  ZIP 文件格式规范包括自 2001 年起对 bzip2 压缩的支持，自 2006 年起对
+  LZMA 压缩的支持，以及自 2020 年起对 Zstandard 压缩的支持。 但是，一
+  些工具（包括较旧的 Python 发布版）不支持这些压缩方法，并可能完全拒绝
+  处理 ZIP 文件，或者无法提取单个文件。
+
+参见:
+
+  PKZIP 应用程序笔记
+     Phil Katz 编写的 ZIP 文件格式文档，此格式和使用的算法的创建者。
+
+  Info-ZIP 主页
+     有关 Info-ZIP 项目的 ZIP 存档程序和开发库的信息。
+
+
+ZipFile 对象
+============
+
+class zipfile.ZipFile(file, mode='r', compression=ZIP_STORED, allowZip64=True, compresslevel=None, *, strict_timestamps=True, metadata_encoding=None)
+
+   打开一个 ZIP 文件，*file* 为一个指向文件的路径（字符串），一个类文
+   件对象或者一个 *path-like object*。
+
+   形参 *mode* 应当为 "'r'" 来读取一个存在的文件，"'w'" 来截断并写入新
+   的文件， "'a'" 来添加到一个存在的文件，或者 "'x'" 来仅新建并写入新
+   的文件。如果 *mode* 为 "'x'" 并且 *file* 指向已经存在的文件，则抛出
+   "FileExistsError"。如果 *mode* 为 "'a'" 且 *file* 为已存在的文件，
+   则额外的文件将被加入。如果 *file* 不指向 ZIP 文件，之后一个新的 ZIP
+   归档将被追加为此文件。这是为了将 ZIP 归档添加到另一个文件（例如
+   "python.exe"）。如果 *mode* 为 "'a'" 并且文件不存在， 则会新建。如
+   果 *mode* 为 "'r'" 或 "'a'"， 则文件应当可定位。
+
+   *compression* 是在写入归档时要使用的 ZIP 压缩方法，应为
+   "ZIP_STORED", "ZIP_DEFLATED", "ZIP_BZIP2", "ZIP_LZMA" 或
+   "ZIP_ZSTANDARD"；不可识别的值将导致引发 "NotImplementedError"。 如
+   果指定了 "ZIP_DEFLATED", "ZIP_BZIP2", "ZIP_LZMA" 或 "ZIP_ZSTANDARD"
+   但相应的模块 ("zlib", "bz2", "lzma" 或 "compression.zstd") 不可用，
+   则会引发 "RuntimeError"。 默认值为 "ZIP_STORED"。
+
+   如果 *allowZip64* 为 "True" (默认值) 则 zipfile 将在 zipfile 大于 4
+   GiB 时创建使用 ZIP64 扩展的 ZIP 文件。 如果为 "false" 则 "zipfile"
+   将在 ZIP 文件需要 ZIP64 扩展时引发异常。
+
+   *compresslevel* 形参控制在将文件写入归档时要使用的压缩等级。 当使用
+   "ZIP_STORED" 或 "ZIP_LZMA" 该形参将无效。 当使用 "ZIP_DEFLATED" 时
+   接受整数 "0" 至 "9" (参见 "zlib" 了解详情)。 当使用 "ZIP_BZIP2" 时
+   接受整数 "1" 至 "9" (参见 "bz2" 了解详情)。 当使用 "ZIP_ZSTANDARD"
+   时通常接受整数 "-131072" 至 "22" (参见
+   "CompressionParameter.compression_level" 了解获取有效值及其含义的更
+   多信息)。
+
+   *strict_timestamps* 参数在设为 "False" 时允许压缩早于 1980-01-01 的
+   文件，代价是会将时间戳设为 1980-01-01。 类似的行为也会对晚于
+   2107-12-31 的文件发生，时间戳也会被设为该上限值。
+
+   当 mode 为 "'r'" 时，可以将 *metadata_encoding* 设为某个编解码器的
+   名称，它将被用来解码元数据如成员名称和 ZIP 注释等等。
+
+   如果创建文件时使用 "'w'", "'x'" 或 "'a'" 模式并且未向归档添加任何文
+   件就执行了 "closed"，则会将适当的空归档 ZIP 结构写入文件。
+
+   ZipFile 也是一个上下文管理器，因此支持 "with" 语句。 在这个示例中，
+   *myzip* 将在 "with" 语句块执行完成之后被关闭 --- 即使是发生了异常:
+
+      with ZipFile('spam.zip', 'w') as myzip:
+          myzip.write('eggs.txt')
+
+   备注:
+
+     *metadata_encoding* 是用于 ZipFile 的实例级设置。 不能在成员层级
+     上设置此选项。该属性是对旧式实现的变通处理，它产生的归档文件名会
+     使用当前语言区域编码格式或代码页（主要是在 Windows 上）。 根据
+     .ZIP 标准，元数据的编码格式可以通过归档文件标头中的一个旗标指定为
+     IBM 代码页（默认）或 UTF-8。 该旗标优先于 *metadata_encoding*，后
+     者是一个 Python 专属的扩展。
+
+   在 3.2 版本发生变更: 添加了将 "ZipFile" 用作上下文管理器的功能。
+
+   在 3.3 版本发生变更: 添加了对 "bzip2" 和 "lzma" 压缩的支持。
+
+   在 3.4 版本发生变更: 默认启用 ZIP64 扩展。
+
+   在 3.5 版本发生变更: 添加了对不可查找数据流的支持。 并添加了对
+   "'x'" 模式的支持。
+
+   在 3.6 版本发生变更: 在此之前，对于不可识别的压缩值将引发普通的
+   "RuntimeError"。
+
+   在 3.6.2 版本发生变更: *file* 形参接受一个 *path-like object*。
+
+   在 3.7 版本发生变更: 添加了 *compresslevel* 形参。
+
+   在 3.8 版本发生变更: *strict_timestamps* 仅限关键字形参。
+
+   在 3.11 版本发生变更: 增加了对指定成员名称编码格式的支持以便在 ZIP
+   文件的目录和文件标头中读取元数据。
+
+ZipFile.close()
+
+   关闭归档文件。 你必须在退出程序之前调用 "close()" 否则将不会写入关
+   键记录数据。
+
+ZipFile.getinfo(name)
+
+   返回一个 "ZipInfo" 对象，其中包含有关归档成员 *name* 的信息。 针对
+   一个目前并不包含于归档中的名称调用 "getinfo()" 将会引发 "KeyError"
+   。
+
+ZipFile.infolist()
+
+   返回一个列表，其中包含每个归档成员的 "ZipInfo" 对象。 如果是打开一
+   个现有归档则这些对象的排列顺序与它们对应条目在磁盘上的实际 ZIP 文件
+   中的顺序一致。
+
+ZipFile.namelist()
+
+   按名称返回归档成员的列表。
+
+ZipFile.open(name, mode='r', pwd=None, *, force_zip64=False)
+
+   以二进制文件型对象的形式访问一个归档成员。 *name* 可以是归档内某个
+   文件的名称或是某个 "ZipInfo" 对象。 如果包括了 *mode* 形参，则它必
+   须为 "'r'" (默认值) 或 "'w'"。 *pwd* 是用于解密 "bytes" 对象形式的
+   已加密 ZIP 文件的密码。
+
+   "open()" 也是一个上下文管理器，因此支持 "with" 语句:
+
+      with ZipFile('spam.zip') as myzip:
+          with myzip.open('eggs.txt') as myfile:
+              print(myfile.read())
+
+   如果 *mode* 为 "'r'" 则文件型对象 ("ZipExtFile") 将为只读并且提供下
+   列方法: "read()", "readline()", "readlines()", "seek()", "tell()",
+   "__iter__()", "__next__()"。 这些对象可独立于 ZipFile 进行操作。
+
+   如果 "mode='w'" 则返回一个可写入的文件句柄，它将支持 "write()" 方法
+   。 当一个可写入的文件句柄被打开时，尝试读写 ZIP 文件中的其他文件将
+   会引发 "ValueError"。
+
+   在两种情况下该文件型对象还具有属性 "name"，它等价于归档内文件的名称
+   ，以及 "mode"，它根据输入模式的不同可能为 "'rb'" 或 "'wb'"。
+
+   当写入一个文件时，如果文件大小不能预先确定但是可能超过 2 GiB，可传
+   入 "force_zip64=True" 以确保标头格式能够支持超大文件。 如果文件大小
+   可以预先确定，则在构造 "ZipInfo" 对象时应设置 "file_size"，并将其用
+   作 *name* 形参。
+
+   备注:
+
+     "open()", "read()" 和 "extract()" 方法可接受文件名或 "ZipInfo" 对
+     象。 当尝试读取一个包含重复名称成员的 ZIP 文件时你将发现此功能很
+     有好处。
+
+   在 3.6 版本发生变更: 移除了对 "mode='U'" 的支持。 请使用
+   "io.TextIOWrapper" 以在 *universal newlines* 模式中读取已压缩的文本
+   文件。
+
+   在 3.6 版本发生变更: 现在 "ZipFile.open()" 可以被用来配合
+   "mode='w'" 选项将文件写入归档。
+
+   在 3.6 版本发生变更: 在已关闭的 ZipFile 上调用 "open()" 将引发
+   "ValueError"。 在之前的版本中则会引发 "RuntimeError"。
+
+   在 3.13 版本发生变更: 为可写文件型对象增加了属性 "name" 和 "mode"。
+   可读文件型对象的 "mode" 属性值由 "'r'" 改为 "'rb'"。
+
+ZipFile.extract(member, path=None, pwd=None)
+
+   从归档中提取一个成员放入当前工作目录；*member* 必须是一个成员的完整
+   名称或 "ZipInfo" 对象。 成员的文件信息会尽可能精确地被提取。 *path*
+   指定一个要放入的不同目录。 *member* 可以是一个文件名或 "ZipInfo" 对
+   象。 *pwd* 是 "bytes" 对象形式的用于解密已加密文件的密码。
+
+   返回所创建的经正规化的路径（对应于目录或新文件）。
+
+   备注:
+
+     如果一个成员文件名为绝对路径，则将去掉驱动器/UNC共享点和前导的（
+     反）斜杠，例如: "///foo/bar" 在 Unix 上将变为 "foo/bar"，而
+     "C:\foo\bar" 在 Windows 上将变为 "foo\bar"。 并且一个成员文件名中
+     的所有 "".."" 都将被移除，例如: "../../foo../../ba..r" 将变为
+     "foo../ba..r"。 在 Windows 上非法字符 (":", "<", ">", "|", """,
+     "?", and "*") 会被替换为下划线 ("_")。
+
+   在 3.6 版本发生变更: 在已关闭的 ZipFile 上调用 "extract()" 将引发
+   "ValueError"。 在之前的版本中则将引发 "RuntimeError"。
+
+   在 3.6.2 版本发生变更: *path* 形参接受一个 *path-like object*。
+
+ZipFile.extractall(path=None, members=None, pwd=None)
+
+   从归档中提取出所有成员放入当前工作目录。 *path* 指定一个要放入的不
+   同目录。 *members* 为可选项且必须为 "namelist()" 所返回列表的一个子
+   集。 *pwd* 是 "bytes" 对象形式的用于解密已加密文件的密码。
+
+   警告:
+
+     绝不要未经预先检验就从不可靠的源中提取归档文件。 这样有可能在
+     *path* 之外创建文件，例如某些成员具有以 ""/"" 开始的文件名或带有
+     两个点号 "".."" 的文件名。 此模块会尝试防止这种情况。 参见
+     "extract()" 的注释。
+
+   在 3.6 版本发生变更: 在已关闭的 ZipFile 上调用 "extractall()" 将引
+   发 "ValueError"。 在之前的版本中则将引发 "RuntimeError"。
+
+   在 3.6.2 版本发生变更: *path* 形参接受一个 *path-like object*。
+
+ZipFile.printdir()
+
+   将归档的目录表打印到 "sys.stdout"。
+
+ZipFile.setpassword(pwd)
+
+   将 *pwd* (一个 "bytes" 对象) 设为用于提取已加密文件的默认密码。
+
+ZipFile.read(name, pwd=None)
+
+   返回归档中文件 *name* 的字节数据。 *name* 是归档中文件的名称，或是
+   一个 "ZipInfo" 对象。 归档必须以读取或追加模式打开。 如果提供了
+   *pwd*，它应为 "bytes" 对象形式的用于解密已加密文件的密码，它会覆盖
+   通过 "setpassword()" 设置的默认密码。 在使用 "ZIP_STORED",
+   "ZIP_DEFLATED", "ZIP_BZIP2", "ZIP_LZMA" 或 "ZIP_ZSTANDARD" 以外的压
+   缩方法的 ZipFile 上调用 "read()" 将引发 "NotImplementedError"。 如
+   果相应的压缩模块不可用也会引发错误。
+
+   在 3.6 版本发生变更: 在已关闭的 ZipFile 上调用 "read()" 将引发
+   "ValueError"。 在之前的版本中则会引发 "RuntimeError"。
+
+ZipFile.testzip()
+
+   读取归档中的所有文件并检查它们的 CRC 和文件头。 返回第一个已损坏文
+   件的名称，在其他情况下则返回 "None"。
+
+   在 3.6 版本发生变更: 在已关闭的 ZipFile 上调用 "testzip()" 将引发
+   "ValueError"。 在之前的版本中则将引发 "RuntimeError"。
+
+ZipFile.write(filename, arcname=None, compress_type=None, compresslevel=None)
+
+   将名为 *filename* 的文件写入归档，给予的归档名为 *arcname* (默认情
+   况下将与 *filename* 一致，但是不带驱动器盘符并会移除开头的路径分隔
+   符)。 *compress_type* 如果给出，它将覆盖作为构造器 *compression* 形
+   参对于新条目所给出的值。 类似地，*compresslevel* 如果给出也将覆盖构
+   造器。 归档必须使用 "'w'", "'x'" 或 "'a'" 模式打开。
+
+   备注:
+
+     ZIP 文件标准在历史上并未指定元数据编码格式，但是强烈建议使用
+     CP437（原始 IBM PC 编码格式）来实现互操作性。 最近的版本允许（仅
+     ）使用 UTF-8。 在这个模块中，如果成员名称包含任何非 ASCII 字符则
+     将自动使用 UTF-8 来写入它们。 不可能用 ASCII 或 UTF-8 以外的任何
+     其他编码格式来写入成员名称。
+
+   备注:
+
+     归档名称应当是基于归档根目录的相对路径，也就是说，它们不应以路径
+     分隔符开头。
+
+   备注:
+
+     如果 "arcname" (或 "filename"，如果 "arcname" 未给出) 包含一个空
+     字节，则归档中该文件的名称将在空字节位置被截断。
+
+   备注:
+
+     文件名开头有一个斜杠可能导致存档文件无法在 Windows 系统上的某些
+     zip 程序中打开。
+
+   在 3.6 版本发生变更: 在使用 "'r'" 模式创建的 ZipFile 或已关闭的
+   ZipFile 上调用 "write()" 将引发 "ValueError"。 在之前的版本中则会引
+   发 "RuntimeError"。
+
+ZipFile.writestr(zinfo_or_arcname, data, compress_type=None, compresslevel=None)
+
+   将一个文件写入归档。 内容为 *data*，它可以是一个 "str" 或 "bytes"
+   的实例；如果是 "str"，则会先使用 UTF-8 进行编码。
+   *zinfo_or_arcname* 可以是它在归档中将被给予的名称，或者是 "ZipInfo"
+   的实例。 如果它是一个实例，则至少必须给定文件名、日期和时间。 如果
+   它是一个名称，则日期和时间会被设为当前日期和时间。 归档必须以
+   "'w'", "'x'" 或 "'a'" 模式打开。
+
+   如果给定了 *compress_type*，它将会覆盖作为新条目构造器的
+   *compression* 形参或在 *zinfo_or_arcname* (如果是一个 "ZipInfo" 实
+   例) 中所给出的值。 类似地，如果给定了 *compresslevel*，它将会覆盖构
+   造器。
+
+   备注:
+
+     当传入一个 "ZipInfo" 实例作为 *zinfo_or_arcname* 形参时，所使用的
+     压缩方法将为在给定的 "ZipInfo" 实例的 *compress_type* 成员中指定
+     的方法。 默认情况下，"ZipInfo" 构造器将此成员设为 "ZIP_STORED"。
+
+   在 3.2 版本发生变更: *compress_type* 参数。
+
+   在 3.6 版本发生变更: 在使用 "'r'" 模式创建的 ZipFile 或已关闭的
+   ZipFile 上调用 "writestr()" 将引发 "ValueError"。 在之前的版本中则
+   会引发 "RuntimeError"。
+
+   在 3.14 版本发生变更: 现在将遵守 "SOURCE_DATE_EPOCH" 环境变量。 如
+   果已设置，它将使用该值作为文件写入 ZIP 归档的修改时间戳，而不是使用
+   当前时间。
+
+ZipFile.mkdir(zinfo_or_directory, mode=511)
+
+   在归档文件内创建一个目录。 如果 *zinfo_or_directory* 是一个字符串，
+   则会在归档文件中以 *mode* 参数指定的模式创建目录。 但是，如果
+   *zinfo_or_directory* 是一个 "ZipInfo" 实例则 *mode* 参数将被忽略。
+
+   归档文件必须以 "'w'", "'x'" 或 "'a'" 模式打开。
+
+   Added in version 3.11.
+
+以下数据属性也是可用的:
+
+ZipFile.filename
+
+   ZIP 文件的名称。
+
+ZipFile.debug
+
+   要使用的调试输出等级。 这可以设为从 "0" (默认无输出) 到 "3" (最多输
+   出) 的值。 调试信息会被写入 "sys.stdout"。
+
+ZipFile.comment
+
+   关联到 ZIP 文件的 "bytes" 对象形式的说明。 如果将说明赋给以 "'w'",
+   "'x'" 或 "'a'" 模式创建的 "ZipFile" 实例，它的长度不应超过 65535 字
+   节。 超过此长度的说明将被截断。
+
+
+Path 对象
+=========
+
+class zipfile.Path(root, at='')
+
+   根据 "root" zipfile (它可以是一个 "ZipFile" 实例或适合传给
+   "ZipFile" 构造器的 "file") 构造一个 Path 对象。
+
+   "at" 指定此 Path 在 zipfile 中的位置，例如 'dir/file.txt', 'dir/'
+   或 ''。 默认为空字符串，即指定根目录。
+
+   备注:
+
+     "Path" 类不会对 ZIP 归档内的文件名做无害化处理。 不同于
+     "ZipFile.extract()" 和 "ZipFile.extractall()" 方法，对文件名做验
+     证或无害化处理以防止路径遍历漏洞（例如包含 ".." 或绝对路径的文件
+     名）是调用方的责任。 当处理不受信任的归档时，请考虑使用
+     "os.path.abspath()" 来解析文件名并使用 "os.path.commonpath()" 来
+     检查目标路径。
+
+Path 对象会公开 "pathlib.Path" 对象的下列特性:
+
+Path 对象可以使用 "/" 运算符或 "joinpath" 来进行遍历。
+
+Path.name
+
+   最终的路径组成部分。
+
+Path.open(mode='r', *, pwd, **)
+
+   在当前路径上唤起 "ZipFile.open()"。 允许通过支持的模式打开用于读取
+   或写入文本或二进制数据: 'r', 'w', 'rb', 'wb'。 当以文本模式打开时位
+   置和关键字参数会被传给 "io.TextIOWrapper"，在其他情况下则会被忽略。
+   "pwd" 是要传给 "ZipFile.open()" 的 "pwd" 形参。
+
+   在 3.9 版本发生变更: 增加了对以文本和二进制模式打开的支持。 现在默
+   认为文本模式。
+
+   在 3.11.2 版本发生变更: "encoding" 形参可以作为位置参数来提供而不会
+   引起 "TypeError"。 这种情况在 3.9 中是会发生的。 需要与未打补丁的
+   3.10 和 3.11 版保持兼容的代码必须将所有 "io.TextIOWrapper" 参数，包
+   括 "encoding" 作为关键字参数传入。
+
+Path.iterdir()
+
+   枚举当前目录的子项。
+
+Path.is_dir()
+
+   如果当前上下文引用了一个目录则返回 "True"。
+
+Path.is_file()
+
+   如果当前上下文引用了一个文件则返回 "True"。
+
+Path.is_symlink()
+
+   如果当前上下文引用了一个符号链接则返回 "True"。
+
+   Added in version 3.12.
+
+   在 3.13 版本发生变更: 在之前版本中，"is_symlink" 将无条件地返回
+   "False"。
+
+Path.exists()
+
+   如果当前上下文引用了 zip 文件内的一个文件或目录则返回 "True"。
+
+Path.suffix
+
+   最终组件末尾的以点号分隔的部分，如果存在的话。 这通常被称为文件扩展
+   名。
+
+   Added in version 3.11: 添加了 "Path.suffix" 特征属性。
+
+Path.stem
+
+   路径的末尾部分，不带文件后缀。
+
+   Added in version 3.11: 添加了 "Path.stem" 特征属性。
+
+Path.suffixes
+
+   由路径后缀组成的列表，通常被称为文件扩展名。
+
+   Added in version 3.11: 添加了 "Path.suffixes" 特征属性。
+
+Path.read_text(*, **)
+
+   读取当前文件为 unicode 文本。 位置和关键字参数会被传递给
+   "io.TextIOWrapper" ("buffer" 除外，它将由上下文确定)。
+
+   在 3.11.2 版本发生变更: "encoding" 形参可以作为位置参数来提供而不会
+   引起 "TypeError"。 这种情况在 3.9 中是会发生的。 需要与未打补丁的
+   3.10 和 3.11 版保持兼容的代码必须将所有 "io.TextIOWrapper" 参数，包
+   括 "encoding" 作为关键字参数传入。
+
+Path.read_bytes()
+
+   读取当前文件为字节串。
+
+Path.joinpath(*other)
+
+   返回一个新的 Path 对象，其中合并了每个 *other* 参数。 以下代码是等
+   价的:
+
+      >>> Path(...).joinpath('child').joinpath('grandchild')
+      >>> Path(...).joinpath('child', 'grandchild')
+      >>> Path(...) / 'child' / 'grandchild'
+
+   在 3.10 版本发生变更: 在 3.10 之前，"joinpath" 未被写入文档并且只接
+   受一个形参。
+
+zipp 项目向较旧版本的 Python 提供了最新路径对象功能的向下移植。 为尽早
+应用这些改变请使用 "zipp.Path" 来替代 "zipfile.Path"。
+
+
+PyZipFile 对象
+==============
+
+"PyZipFile" 构造器接受与 "ZipFile" 构造器相同的形参，以及一个额外的形
+参 *optimize*。
+
+class zipfile.PyZipFile(file, mode='r', compression=ZIP_STORED, allowZip64=True, optimize=-1)
+
+   在 3.2 版本发生变更: 增加了 *optimize* 形参。
+
+   在 3.4 版本发生变更: 默认启用 ZIP64 扩展。
+
+   实例在 "ZipFile" 对象所具有的方法以外还附加了一个方法:
+
+   writepy(pathname, basename='', filterfunc=None)
+
+      查找 "*.py" 文件并将相应的文件添加到归档。
+
+      如果 "PyZipFile" 的 *optimize* 形参未给定或为 "-1"，则相应的文件
+      为 "*.pyc" 文件，并在必要时进行编译。
+
+      如果 "PyZipFile" 的 *optimize* 形参为 "0", "1" 或 "2"，则仅具有
+      相应优化级别 (参见 "compile()") 的文件会被添加到归档，并在必要时
+      进行编译。
+
+      如果 *pathname* 是文件，则文件名必须以 ".py" 为后缀，并且只有 (
+      相应的 "*.pyc") 文件会被添加到最高层级（不带路径信息）。 如果
+      *pathname* 不是以 ".py" 为后缀的文件，则将引发 "RuntimeError"。
+      如果它是目录，并且该目录不是一个包目录，则所有的 "*.pyc" 文件会
+      被添加到最高层级。 如果目录是一个包目录，则所有的 "*.pyc" 会被添
+      加到包名所表示的文件路径下，并且如果有任何子目录为包目录，则会以
+      排好的顺序递归地添加这些目录。
+
+      *basename* 仅限在内部使用。
+
+      如果给定 *filterfunc*，则它必须是一个接受单个字符串参数的函数。
+      在将其添加到归档之前它将被传入每个路径（包括每个单独的完整路径）
+      。 如果 *filterfunc* 返回假值，则路径将不会被添加，而如果它是一
+      个目录则其内容将被忽略。 例如，如果我们的测试文件全都位于 "test"
+      目录或以字符串 "test_" 打头，则我们可以使用一个 *filterfunc* 来
+      排除它们:
+
+         >>> zf = PyZipFile('myprog.zip')
+         >>> def notests(s):
+         ...     fn = os.path.basename(s)
+         ...     return (not (fn == 'test' or fn.startswith('test_')))
+         ...
+         >>> zf.writepy('myprog', filterfunc=notests)
+
+      "writepy()" 方法会产生带有这样一些文件名的归档:
+
+         string.pyc                   # 最高层级名称
+         test/__init__.pyc            # 包目录
+         test/testall.pyc             # 模块 test.testall
+         test/bogus/__init__.pyc      # 子包目录
+         test/bogus/myfile.pyc        # 子模块 test.bogus.myfile
+
+      在 3.4 版本发生变更: 增加了 *filterfunc* 形参。
+
+      在 3.6.2 版本发生变更: *pathname* 形参接受一个 *path-like
+      object*。
+
+      在 3.7 版本发生变更: 递归排序目录条目。
+
+
+ZipInfo 对象
+============
+
+"ZipInfo" 类的实例会通过 "getinfo()" 和 "ZipFile" 对象的 "infolist()"
+方法返回。 每个对象将存储关于 ZIP 归档的一个成员的信息。
+
+有一个类方法可以为文件系统文件创建 "ZipInfo" 实例:
+
+classmethod ZipInfo.from_file(filename, arcname=None, *, strict_timestamps=True)
+
+   为文件系统中的文件构造一个 "ZipInfo" 实例，并准备将其添加到一个 zip
+   文件。
+
+   *filename* 应为文件系统中某个文件或目录的路径。
+
+   如果指定了 *arcname*，它会被用作归档中的名称。 如果未指定 *arcname*
+   ，则所用名称与 *filename* 相同，但将去除任何驱动器盘符和打头的路径
+   分隔符。
+
+   *strict_timestamps* 参数在设为 "False" 时允许压缩早于 1980-01-01 的
+   文件，代价是会将时间戳设为 1980-01-01。 类似的行为也会对晚于
+   2107-12-31 的文件发生，时间戳也会被设为该上限值。
+
+   Added in version 3.6.
+
+   在 3.6.2 版本发生变更: *filename* 形参接受一个 *path-like object*。
+
+   在 3.8 版本发生变更: 增加了 *strict_timestamps* 仅限关键字形参。
+
+实例具有下列方法和属性:
+
+ZipInfo.is_dir()
+
+   如果此归档成员是一个目录则返回 "True"。
+
+   这会使用条目的名称：目录应当总是以 "/" 结尾。
+
+   Added in version 3.6.
+
+ZipInfo.filename
+
+   归档中的文件名称。
+
+ZipInfo.date_time
+
+   归档成员的最后修改时间和日期。这是一个包含六个值的元组，表示 ZIP 文
+   件中央目录中的"最后[修改]文件时间"和"最后[修改]文件日期"字段。
+
+   该元组包含：
+
+   +---------+----------------------------+
+   | 索引    | 值                         |
+   |=========|============================|
+   | "0"     | 年 (>= 1980)               |
+   +---------+----------------------------+
+   | "1"     | 月（1为基数）              |
+   +---------+----------------------------+
+   | "2"     | 月份中的日期（1为基数）    |
+   +---------+----------------------------+
+   | "3"     | 小时（0为基数）            |
+   +---------+----------------------------+
+   | "4"     | 分钟（0为基数）            |
+   +---------+----------------------------+
+   | "5"     | 秒（0为基数）              |
+   +---------+----------------------------+
+
+   备注:
+
+     ZIP 格式支持多个位于不同位置的时间戳字段（中央目录、NTFS/UNIX 系
+     统的额外字段等）。此属性专门返回来自中央目录的时间戳。ZIP 文件中
+     的中央目录时间戳格式不支持 1980 年之前的时间戳。虽然某些额外字段
+     格式（如 UNIX 时间戳）可以表示更早的日期，但此属性仅返回中央目录
+     时间戳。中央目录时间戳被解释为表示本地时间而非 UTC 时间，以匹配其
+     他 ZIP 工具的行为。
+
+ZipInfo.compress_type
+
+   归档成员的压缩类型。
+
+ZipInfo.comment
+
+   "bytes" 对象形式的单个归档成员的注释。
+
+ZipInfo.extra
+
+   扩展字段数据。 PKZIP 应用程序笔记 包含一些保存于该 "bytes" 对象中的
+   内部结构的注释。
+
+ZipInfo.create_system
+
+   创建 ZIP 归档所用的系统。
+
+ZipInfo.create_version
+
+   创建 ZIP 归档所用的 PKZIP 版本。
+
+ZipInfo.extract_version
+
+   需要用来提取归档的 PKZIP 版本。
+
+ZipInfo.reserved
+
+   必须为零。
+
+ZipInfo.flag_bits
+
+   ZIP 标志位。
+
+ZipInfo.volume
+
+   文件头的分卷号。
+
+ZipInfo.internal_attr
+
+   内部属性。
+
+ZipInfo.external_attr
+
+   外部文件属性。
+
+ZipInfo.header_offset
+
+   文件头的字节偏移量。
+
+ZipInfo.CRC
+
+   未压缩文件的 CRC-32。
+
+ZipInfo.compress_size
+
+   已压缩数据的大小。
+
+ZipInfo.file_size
+
+   未压缩文件的大小。
+
+
+命令行接口
+==========
+
+"zipfile" 模块提供了简单的命令行接口用来与 ZIP 归档进行交互。
+
+如果你想要创建一个新的 ZIP 归档，请在 "-c" 选项后指定其名称然后列出应
+当被包含的文件名:
+
+   $ python -m zipfile -c monty.zip spam.txt eggs.txt
+
+传入一个目录也是可接受的:
+
+   $ python -m zipfile -c monty.zip life-of-brian_1979/
+
+如果你想要将一个 ZIP 归档提取到指定的目录，请使用 "-e" 选项:
+
+   $ python -m zipfile -e monty.zip target-dir/
+
+要获取一个 ZIP 归档中的文件列表，请使用 "-l" 选项:
+
+   $ python -m zipfile -l monty.zip
+
+
+命令行选项
+----------
+
+-l <zipfile>
+--list <zipfile>
+
+   列出一个 zipfile 中的文件名。
+
+-c <zipfile> <source1> ... <sourceN>
+--create <zipfile> <source1> ... <sourceN>
+
+   基于源文件创建 zipfile。
+
+-e <zipfile> <output_dir>
+--extract <zipfile> <output_dir>
+
+   将 zipfile 提取到目标目录中。
+
+-t <zipfile>
+--test <zipfile>
+
+   检测 zipfile 是否有效。
+
+--metadata-encoding <encoding>
+
+   为 "-l", "-e" 和 "-t" 指定成员名称的编码格式。
+
+   Added in version 3.11.
+
+
+解压缩的障碍
+============
+
+zipfile 模块的提取操作可能会由于下面列出的障碍而失败。
+
+
+由于文件本身
+------------
+
+解压缩可能由于不正确的密码 / CRC 校验和 / ZIP 格式或不受支持的压缩方法
+/ 解密而失败。
+
+
+文件系统限制
+------------
+
+超出特定文件系统上的限制可能会导致解压缩失败。 例如目录条目所允许的字
+符、文件名的长度、路径名的长度、单个文件的大小以及文件的数量等等。
+
+
+资源限制
+--------
+
+缺乏内存或磁盘空间将会导致解压缩失败。 例如，作用于 zipfile 库的解压缩
+炸弹 (即 ZIP bomb) 就可能造成磁盘空间耗尽。
+
+
+中断
+----
+
+在解压缩期间中断执行，例如按下 ctrl-C 或杀死解压缩进程可能会导致归档文
+件的解压缩不完整。
+
+
+提取的默认行为
+--------------
+
+不了解提取的默认行为可能导致不符合期望的解压缩结果。 例如，当提取相同
+归档两次时，它会不经询问地覆盖文件。

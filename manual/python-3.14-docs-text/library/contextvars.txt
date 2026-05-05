@@ -1,0 +1,306 @@
+"contextvars" --- 上下文变量
+****************************
+
+======================================================================
+
+本模块提供了相关API用于管理、存储和访问上下文相关的状态。 "ContextVar"
+类用于声明 *上下文变量* 并与其一起使用。函数 "copy_context()" 和类
+"Context" 用于管理异步框架中的当前上下文。
+
+当在并发代码中使用时，有状态的上下文管理器应当使用上下文变量而不是
+"threading.local()" 以防止它们的状态意外地泄露到其他代码中。
+
+更多信息参见  **PEP 567** 。
+
+Added in version 3.7.
+
+
+上下文变量
+==========
+
+class contextvars.ContextVar(name[, *, default])
+
+   此类用于声明一个新的上下文变量，如:
+
+      var: ContextVar[int] = ContextVar('var', default=42)
+
+   *name* 参数用于内省和调试，必需。
+
+   调用 "ContextVar.get()"  时，如果上下文中没有找到此变量的值，则返回
+   可选的仅限关键字参数 *default*  。
+
+   **重要：** 上下文变量应该在顶级模块中创建，且永远不要在闭包中创建。
+   "Context" 对象拥有对上下文变量的强引用，这会阻止上下文变量被垃圾收
+   集器正确回收。
+
+   name
+
+      上下文变量的名称，只读属性。
+
+      Added in version 3.7.1.
+
+   get([default])
+
+      返回当前上下文中此上下文变量的值。
+
+      如果当前上下文中此变量没有值，则此方法会:
+
+      * 如果提供了 *default*，返回其值；或者
+
+      * 返回上下文变量本身的默认值， 如果创建此上下文变量时提供了默认
+        值；或者
+
+      * 抛出  "LookupError" 异常。
+
+   set(value)
+
+      调用此方法设置上下文变量在当前上下文中的值。
+
+      必选参数 *value* 是上下文变量的新值。
+
+      返回一个 "Token" 对象，可通过 "ContextVar.reset()"  方法将上下文
+      变量还原为之前某个状态。
+
+      出于方便考虑，token 对象可被用作上下文管理器以避免手动调用
+      "ContextVar.reset()":
+
+         var = ContextVar('var', default='default value')
+
+         with var.set('new value'):
+             assert var.get() == 'new value'
+
+         assert var.get() == 'default value'
+
+      这是以下代码的快捷写法:
+
+         var = ContextVar('var', default='default value')
+
+         token = var.set('new value')
+         try:
+             assert var.get() == 'new value'
+         finally:
+             var.reset(token)
+
+         assert var.get() == 'default value'
+
+      Added in version 3.14: 增加对使用 token 作为上下文管理器的支持。
+
+   reset(token)
+
+      将上下文变量重置为调用 "ContextVar.set()" 之前、创建 *token* 时
+      候的状态。
+
+      例如:
+
+         var = ContextVar('var')
+
+         token = var.set('new value')
+         # 使用 'var' 的代码；var.get() 将返回 'new value'。
+         var.reset(token)
+
+         # 在重置调用之后 var 将不再有值，
+         # 因此 var.get() 将引发一个 LookupError。
+
+      同一个 *token* 不能被重复使用。
+
+class contextvars.Token
+
+   *Token* 对象是由 "ContextVar.set()" 方法返回的。 它们可以被传入
+   "ContextVar.reset()" 方法来恢复在对应的 *set* 之前状态的变量值。 同
+   一个 token 不能多次重置上下文变量。
+
+   Token 支持 上下文管理器协议 以自动重置上下文变量。 参见
+   "ContextVar.set()"。
+
+   Added in version 3.14: 增加对用作上下文管理器的支持。
+
+   var
+
+      只读属性。指向创建此 token 的 "ContextVar" 对象。
+
+   old_value
+
+      一个只读属性。 会被设为在创建此令牌的 "ContextVar.set()" 方法调
+      用之前该变量所具有的值。 如果调用之前变量没有设置值则它会指向
+      "Token.MISSING"。
+
+   MISSING
+
+      "Token.old_value" 会用到的一个标记对象。
+
+
+手动上下文管理
+==============
+
+contextvars.copy_context()
+
+   返回当前 "Context" 对象的拷贝。
+
+   以下代码片段会获取当前上下文的拷贝并打印设置到其中的所有变量及其值:
+
+      ctx: Context = copy_context()
+      print(list(ctx.items()))
+
+   此函数具有 *O*(1) 复杂度，也就是说对于只包含几个上下文变量和很多上
+   下文变量的情况运行速度是相同的。
+
+class contextvars.Context
+
+   "ContextVars" 与其值的映射。
+
+   "Context()" 创建一个不包含任何值的空上下文。如果要获取当前上下文的
+   拷贝，使用 "copy_context()" 函数。
+
+   每个线程有它自己在用的 "Context" 对象栈。 *current context* 是位于
+   当前线程的栈的顶部的 "Context" 对象。 栈中所有的 "Context" 对象都被
+   视为是 *进入过的*。
+
+   *进入* 一个上下文，这可以通过调用其 "run()" 方法来完成，将把该上下
+   文推入当前线程的栈的顶部使它成为当前上下文。
+
+   *退出* 当前上下文，这可以通过从传给 "run()" 方法的回调退出，通过将
+   该上下文弹出上下文栈的顶部将当前上下文恢复至该上下文被进入之前的上
+   下文来完成。
+
+   由于每个线程都有它自己的上下文栈，"ContextVar" 对象的行为类似于
+   "threading.local()" 在不同线程中赋值时的行为。
+
+   尝试进入一个已被进入的上下文，包括在其他线程中被进入的上下文，将会
+   引发 "RuntimeError"。
+
+   在退出一个上下文之后，它可以在稍后被重新进入（从任何线程）。
+
+   任何通过 "ContextVar.set()" 方法对 "ContextVar" 值的修改都将在当前
+   上下文中被记录。 "ContextVar.get()" 方法将返回关联到当前上下文的值
+   。 退出一个上下文将有效地撤销在进入该上下文期间对上下文变量的任何修
+   改（如有必要，这些值可通过重新进入相应的上下文来恢复）。
+
+   Context 实现了 "collections.abc.Mapping" 接口。
+
+   run(callable, *args, **kwargs)
+
+      进入 Context，执行 "callable(*args, **kwargs)"，然后退出 Context
+      。 返回 *callable* 的返回值，或者如果发生了异常则传播该异常。
+
+      示例:
+
+         import contextvars
+
+         var = contextvars.ContextVar('var')
+         var.set('spam')
+         print(var.get())  # 'spam'
+
+         ctx = contextvars.copy_context()
+
+         def main():
+             # 在调用 'copy_context()' 和 'ctx.run(main)' 之前
+             # 'var' 被设为 'spam'，因此：
+             print(var.get())  # 'spam'
+             print(ctx[var])  # 'spam'
+
+             var.set('ham')
+
+             # 在将 'var' 设为 'ham' 之后：
+             print(var.get())  # 'ham'
+             print(ctx[var])  # 'ham'
+
+         # 'main' 函数对 'var' 的任何修改
+         # 都将包含在 'ctx' 中。
+         ctx.run(main)
+
+         # 'main()' 函数是在 'ctx' 上下文中运行的，
+         # 因此对 'var' 的修改将包含在其中：
+         print(ctx[var])  # 'ham'
+
+         # 不过，在 'ctx' 之外，'var' 仍为 'spam'：
+         print(var.get())  # 'spam'
+
+   copy()
+
+      返回此上下文对象的浅拷贝。
+
+   var in context
+
+      如果 *context* 中设置了 *var* 的值，返回 "True"，否则返回
+      "False"。
+
+   context[var]
+
+      返回 *var* "ContextVar" 变量的值。如果上下文对象中未设置该变量，
+      则抛出 "KeyError" 异常。
+
+   get(var[, default])
+
+      如果 *var* 在上下文对象中具有值则返回 *var* 的值。 在其他情况下
+      返回 *default*。 如果未给出 *default* 则返回 "None"。
+
+   iter(context)
+
+      返回一个存储在上下文对象中的变量的迭代器。
+
+   len(proxy)
+
+      返回上下文对象中所设的变量的数量。
+
+   keys()
+
+      返回上下文对象中的所有变量的列表。
+
+   values()
+
+      返回上下文对象中所有变量值的列表。
+
+   items()
+
+      返回包含上下文对象中所有变量及其值的 2 元组的列表。
+
+
+asyncio 支持
+============
+
+上下文变量在 "asyncio" 中有原生的支持并且无需任何额外配置即可被使用。
+例如，以下是一个简单的回显服务器，它使用上下文变量来让远程客户端的地址
+在处理该客户端的 Task 中可用:
+
+   import asyncio
+   import contextvars
+
+   client_addr_var = contextvars.ContextVar('client_addr')
+
+   def render_goodbye():
+       # 可直接访问当前处理的客户端地址
+       # 而无需显式地将其传给此函数。
+
+       client_addr = client_addr_var.get()
+       return f'Good bye, client @ {client_addr}\r\n'.encode()
+
+   async def handle_request(reader, writer):
+       addr = writer.transport.get_extra_info('socket').getpeername()
+       client_addr_var.set(addr)
+
+       # 现在将可以在我们所调用的任何代码中通过
+       # 'client_addr_var.get()' 调用来获取客户端地址。
+
+       while True:
+           line = await reader.readline()
+           print(line)
+           if not line.strip():
+               break
+
+       writer.write(b'HTTP/1.1 200 OK\r\n')  # 状态行
+       writer.write(b'\r\n')  # 标头
+       writer.write(render_goodbye())  # 消息体
+       writer.close()
+
+   async def main():
+       srv = await asyncio.start_server(
+           handle_request, '127.0.0.1', 8081)
+
+       async with srv:
+           await srv.serve_forever()
+
+   asyncio.run(main())
+
+   # 要进行测试你可以使用 telnet 或 curl：
+   #     telnet 127.0.0.1 8081
+   #     curl 127.0.0.1:8081

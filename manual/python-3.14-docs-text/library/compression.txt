@@ -1,0 +1,19 @@
+"compression" 包
+****************
+
+Added in version 3.14.
+
+"compression" 包包含规范的压缩模块，其中包含几种不同压缩算法的接口。其
+中一些模块在历史上是作为单独的模块提供的；出于兼容性原因，它们将继续以
+其原始名称提供，并且在没有弃用周期的情况下不会被删除。在可行的情况下，
+鼓励在 "compression" 中使用模块。
+
+* "compression.bz2" -- 重新导出 "bz2"
+
+* "compression.gzip" -- 重新导出 "gzip"
+
+* "compression.lzma" -- 重新导出 "lzma"
+
+* "compression.zlib" -- 重新导出 "zlib"
+
+* "compression.zstd" -- Zstandard 压缩库的包装器

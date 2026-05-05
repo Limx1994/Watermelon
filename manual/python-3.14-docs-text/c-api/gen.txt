@@ -1,0 +1,84 @@
+生成器对象
+**********
+
+生成器对象是 Python 用来实现生成器迭代器的对象。它们通常通过迭代产生值
+的函数来创建，而不是显式调用 "PyGen_New()" 或
+"PyGen_NewWithQualName()" 函数。
+
+type PyGenObject
+
+   用于生成器对象的 C 结构体。
+
+PyTypeObject PyGen_Type
+
+   与生成器对象对应的类型对象。
+
+int PyGen_Check(PyObject *ob)
+
+   如果 *ob* 是一个 generator 对象则返回真值；*ob* 必须不为 "NULL"。此
+   函数总是会成功执行。
+
+int PyGen_CheckExact(PyObject *ob)
+
+   如果 *ob* 的类型是 "PyGen_Type" 则返回真值；*ob* 必须不为 "NULL"。
+   此函数总是会成功执行。
+
+PyObject *PyGen_New(PyFrameObject *frame)
+    *返回值：新的引用。*
+
+   基于 *frame* 对象创建并返回一个新的生成器对象。此函数会取走一个对
+   *frame* 的引用。参数必须不为 "NULL"。
+
+PyObject *PyGen_NewWithQualName(PyFrameObject *frame, PyObject *name, PyObject *qualname)
+    *返回值：新的引用。*
+
+   基于 *frame* 对象创建并返回一个新的生成器对象，其中 "__name__" 和
+   "__qualname__" 设为 *name* 和 *qualname*。此函数会取走一个对
+   *frame* 的引用。 *frame* 参数必须不为 "NULL"。
+
+PyCodeObject *PyGen_GetCode(PyGenObject *gen)
+
+   返回一个新的指向 *gen* 所包装的代码对象的 *strong reference*。此函
+   数总是会成功执行。
+
+
+异步生成器对象
+==============
+
+参见: **PEP 525**
+
+PyTypeObject PyAsyncGen_Type
+
+   对应异步生成器对象的类型对象。它在 Python 层面上为
+   "types.AsyncGeneratorType"。
+
+   Added in version 3.6.
+
+PyObject *PyAsyncGen_New(PyFrameObject *frame, PyObject *name, PyObject *qualname)
+
+   新建一个包装了 *frame* 的异步生成器，其中 "__name__" 和
+   "__qualname__" 设为 *name* 和 *qualname*。 *frame* 将被此函数取走并
+   且不能为 "NULL"。
+
+   成功时，此函数将返回一个指向新异步生成器的 *strong reference*。失败
+   时，此函数将返回 "NULL" 并设置一个异常。
+
+   Added in version 3.6.
+
+int PyAsyncGen_CheckExact(PyObject *op)
+
+   如果 *op* 是一个异步生成器对象则返回真值，否则返回假值。此函数总是
+   会成功执行。
+
+   Added in version 3.6.
+
+
+已弃用的 API
+============
+
+PyAsyncGenASend_CheckExact(op)
+
+   这个 *soft deprecated* 状态的 API 是被错误地包括到 Python 的 C API
+   中的。
+
+   它出现在这里只是出于完整性考虑；请不要使用此 API。

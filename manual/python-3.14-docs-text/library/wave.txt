@@ -1,0 +1,233 @@
+"wave" --- 读写 WAV 文件
+************************
+
+**源代码:** Lib/wave.py
+
+======================================================================
+
+"wave" 模块提供了一个处理 Waveform Audio "WAVE"（或 "WAV"）文件格式的
+便捷接口。仅支持未压缩的 PCM 编码 wave 文件。
+
+在 3.12 版本发生变更: 增加了对 "WAVE_FORMAT_EXTENSIBLE" 标头的支持，要
+求扩展格式为 "KSDATAFORMAT_SUBTYPE_PCM"。
+
+"wave" 模块定义了以下函数和异常：
+
+wave.open(file, mode=None)
+
+   如果 *file* 是一个字符串，打开对应文件名的文件。否则就把它作为文件
+   型对象来处理。*mode* 可以为以下值：
+
+   "'rb'"
+      只读模式。
+
+   "'wb'"
+      只写模式。
+
+   注意不支持同时读写 WAV 文件。
+
+   *mode* 设为 "'rb'" 时返回一个 "Wave_read" 对象，而 *mode* 设为
+   "'wb'" 时返回一个 "Wave_write" 对象。如果省略 *mode* 并指定 *file*
+   来传入一个文件型对象，则 "file.mode" 会被用作 *mode* 的默认值。
+
+   如果你传入一个文件型对象，当调用 wave 对象的 "close()" 方法时并不会
+   真正关闭它；调用者需要负责关闭文件对象。
+
+   "open()" 函数可以在 "with" 语句中使用。 当 "with" 代码块结束时，
+   "Wave_read.close()" 或 "Wave_write.close()" 方法会被调用。
+
+   在 3.4 版本发生变更: 添加了对不可查找文件的支持。
+
+exception wave.Error
+
+   当不符合 WAV 格式规范或遇到实现缺陷时引发的错误。
+
+
+Wave_read 对象
+==============
+
+class wave.Wave_read
+
+   读取一个 WAV 文件。
+
+   由 "open()" 返回的 Wave_read 对象，有以下几种方法:
+
+   close()
+
+      关闭由 "wave" 打开的流，并使实例不可用。 此方法会在对象回收时自
+      动调用。
+
+   getnchannels()
+
+      返回声道数量 ("1" 为单声道，"2" 为立体声)。
+
+   getsampwidth()
+
+      返回采样字节长度。
+
+   getframerate()
+
+      返回采样频率。
+
+   getnframes()
+
+      返回音频总帧数。
+
+   getcomptype()
+
+      返回压缩类型（只支持 "'NONE'" 类型）。
+
+   getcompname()
+
+      "getcomptype()" 的人类可读版本。通常 "'not compressed'" 对应
+      "'NONE'"。
+
+   getparams()
+
+      返回一个 "namedtuple()" "(nchannels, sampwidth, framerate,
+      nframes, comptype, compname)"，等价于 "get*()" 方法的输出。
+
+   readframes(n)
+
+      读取并返回以 "bytes" 对象表示的最多 *n* 帧音频。
+
+   rewind()
+
+      重置文件指针至音频开头。
+
+   以下两个方法是为了和旧的 "aifc" 模块保持兼容而定义的，实际上不会做
+   任何事情。
+
+   getmarkers()
+
+      返回 "None"。
+
+      从 3.13 版起已弃用，将在 3.15 版中移除: 此方法只是为了和已在
+      Python 3.13 中被移除的 "aifc" 模块保持兼容而存在的。
+
+   getmark(id)
+
+      引发错误异常。
+
+      从 3.13 版起已弃用，将在 3.15 版中移除: 此方法只是为了和已在
+      Python 3.13 中被移除的 "aifc" 模块保持兼容而存在的。
+
+   以下两个方法定义了一个在二者间通用的"位置"概念，在其他方面则依赖于
+   具体实现。
+
+   setpos(pos)
+
+      设置文件指针到指定位置。
+
+   tell()
+
+      返回当前文件指针位置。
+
+
+Wave_write 对象
+===============
+
+class wave.Wave_write
+
+   写入一个 WAV 文件。
+
+   Wave_write 对象，由 "open()" 返回。
+
+   对于可查找的输出流，"wave" 头将自动更新以反映实际写入的帧数。 对于
+   不可查找的流，当写入第一帧时 *nframes* 值必须是准确的。 要获取准确
+   的 *nframes* 值可以通过调用 "setnframes()" 或 "setparams()" 并附带
+   "close()" 被调用之前将要写入的帧数然后使用 "writeframesraw()" 来写
+   入帧数据，或者通过调用 "writeframes()" 并附带所有要写入的帧。 在后
+   一种情况下 "writeframes()" 将计算数据中的帧数并在写入帧数据之前相应
+   地设置 *nframes*。
+
+   在 3.4 版本发生变更: 添加了对不可查找文件的支持。
+
+   Wave_write 对象具有以下方法:
+
+   close()
+
+      确保 *nframes* 正确，并关闭由 "wave" 打开的文件。 此方法会在对象
+      回收时调用。 如果输出流不可查找且 *nframes* 与实际写入的帧数不匹
+      配，将引发异常。
+
+   setnchannels(n)
+
+      设置声道数。
+
+   getnchannels()
+
+      返回声道数。
+
+   setsampwidth(n)
+
+      设置采样宽度为 *n* 个字节。
+
+   getsampwidth()
+
+      返回以字节数表示的采样宽度。
+
+   setframerate(n)
+
+      设置采样频率为 *n*。
+
+      在 3.2 版本发生变更: 对此方法的非整数输入会被舍入到最接近的整数
+      。
+
+   getframerate()
+
+      返回帧速率。
+
+   setnframes(n)
+
+      设置总帧数为 *n*。 如果与之后实际写入的帧数不一致此值将会被更改
+      （如果输出流不可查找则此更改尝试将引发错误）。
+
+   getnframes()
+
+      返回已写入的音频帧数。
+
+   setcomptype(type, name)
+
+      设置压缩格式。目前只支持 "NONE" 即无压缩格式。
+
+   getcomptype()
+
+      返回压缩类型 ("'NONE'")。
+
+   getcompname()
+
+      返回人类可读的压缩类型名称。
+
+   setparams(tuple)
+
+      *tuple* 应该是 "(nchannels, sampwidth, framerate, nframes,
+      comptype, compname)"，每项的值可用于 "set*()" 方法。 设置所有参
+      数。
+
+   getparams()
+
+      返回包含当前输出形参的 "namedtuple()" "(nchannels, sampwidth,
+      framerate, nframes, comptype, compname)"。
+
+   tell()
+
+      返回当前文件指针，其指针含义和 "Wave_read.tell()" 以及
+      "Wave_read.setpos()" 是一致的。
+
+   writeframesraw(data)
+
+      写入音频数据但不更新 *nframes*。
+
+      在 3.4 版本发生变更: 现在可接受任意 *bytes-like object*。
+
+   writeframes(data)
+
+      写入音频帧并确保 *nframes* 是正确的。 如果输出流不可查找且在
+      *data* 被写入之后写入的总帧数与之前设定的 *nframes* 值不匹配将会
+      引发错误。
+
+      在 3.4 版本发生变更: 现在可接受任意 *bytes-like object*。
+
+      注意在调用 "writeframes()" 或 "writeframesraw()" 之后再设置任何
+      格式参数是无效的，而且任何这样的尝试将引发 "wave.Error"。

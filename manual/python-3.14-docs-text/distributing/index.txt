@@ -1,0 +1,7 @@
+分发 Python 模块
+****************
+
+备注:
+
+  有关分发 Python 模块和包的信息和指南已被移至 Python Packaging User
+  Guide，以及 packaging Python projects 中的教程。

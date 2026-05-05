@@ -1,0 +1,93 @@
+"fnmatch" --- Unix 文件名模式匹配
+*********************************
+
+**源代码:** Lib/fnmatch.py
+
+======================================================================
+
+此模块提供了 Unix shell 风格的通配符，它们 *并不* 等同于正则表达式（关
+于后者的文档参见 "re" 模块）。shell 风格通配符所使用的特殊字符如下：
+
++--------------+--------------------------------------+
+| 模式         | 含义                                 |
+|==============|======================================|
+| "*"          | 匹配所有                             |
++--------------+--------------------------------------+
+| "?"          | 匹配任何单个字符                     |
++--------------+--------------------------------------+
+| "[seq]"      | 匹配 *seq* 中的任何字符              |
++--------------+--------------------------------------+
+| "[!seq]"     | 匹配任何不在 *seq* 中的字符          |
++--------------+--------------------------------------+
+
+对于字面值匹配，请将原字符用方括号括起来。例如，"'[?]'" 将匹配字符
+"'?'"。
+
+注意文件名分隔符 (Unix 上为 "'/'") *不会* 被此模块特别对待。请参见
+"glob" 模块了解文件名扩展 ("glob" 使用 "filter()" 来匹配文件名的各个部
+分)。 类似地，以一个句点打头的文件名也不会被此模块特别对待，可以通过
+"*" 和 "?" 模式来匹配。
+
+除非另有说明，"文件名字符串" 和 "模式字符串" 是指使用 "str" 或
+"ISO-8859-1" 编码的 "bytes" 对象。请注意下面记录的函数不允许将 "bytes"
+模式与 "str" 文件名混用，反之亦然。
+
+最后，请注意 *maxsize* 为 32768 的 "functools.lru_cache()" 将被用于缓
+存下列函数中（标注类型的）已编译正则表达式: "fnmatch()"、
+"fnmatchcase()"、"filter()"、"filterfalse()"。
+
+fnmatch.fnmatch(name, pat)
+
+   检测文件名字符串 *name* 是否匹配模式字符串 *pat*，返回 "True" 或
+   "False"。两个形参都会使用 "os.path.normcase()" 进行大小写正规化。
+   "fnmatchcase()" 可被用于执行大小写敏感的比较，无论这是否为所在操作
+   系统的标准。
+
+   这个例子将打印当前目录下带有扩展名 ".txt" 的所有文件名:
+
+      import fnmatch
+      import os
+
+      for file in os.listdir('.'):
+          if fnmatch.fnmatch(file, '*.txt'):
+              print(file)
+
+fnmatch.fnmatchcase(name, pat)
+
+   检测文件名字符串 *name* 是否匹配模式字符串 *pat*，返回 "True" 或
+   "False"；此比较是大小写敏感的并且不会应用 "os.path.normcase()".
+
+fnmatch.filter(names, pat)
+
+   基于包含匹配模式字符串 *pat* 的文件名字符串 *names* 的 *iterable*
+   构造一个列表。它等价于 "[n for n in names if fnmatch(n, pat)]"，但
+   实现得更为高效。
+
+fnmatch.filterfalse(names, pat)
+
+   根据不能匹配模式字符串 *pat* 的文件名字符串 *names* 的 *iterable*
+   中的元素构造一个列表。它相当于 "[n for n in names if not fnmatch(n,
+   pat)]"，但实现得更为高效。
+
+   Added in version 3.14.
+
+fnmatch.translate(pat)
+
+   返回由 shell 风格的模式 *pat* 转换成的正则表达式以配合 "re.match()"
+   使用。此模式预期为一个 "str".
+
+   示例：
+
+   >>> import fnmatch, re
+   >>>
+   >>> regex = fnmatch.translate('*.txt')
+   >>> regex
+   '(?s:.*\\.txt)\\z'
+   >>> reobj = re.compile(regex)
+   >>> reobj.match('foobar.txt')
+   <re.Match object; span=(0, 10), match='foobar.txt'>
+
+参见:
+
+  模块 "glob"
+     Unix shell 风格路径扩展。

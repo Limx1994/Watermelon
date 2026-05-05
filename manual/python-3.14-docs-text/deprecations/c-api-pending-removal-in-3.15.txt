@@ -1,0 +1,127 @@
+计划在 Python 3.15 中移除
+*************************
+
+* "PyImport_ImportModuleNoBlock()": 改用 "PyImport_ImportModule()"。
+
+* "PyWeakref_GetObject()" 和 "PyWeakref_GET_OBJECT()": 改用
+  "PyWeakref_GetRef()"。在 Python 3.12 及更旧的版本中可以使用
+  pythoncapi-compat 项目 来获取 "PyWeakref_GetRef()".
+
+* "Py_UNICODE" 类型和 "Py_UNICODE_WIDE" 宏：改用 "wchar_t"。
+
+* "PyUnicode_AsDecodedObject()": 改用 "PyCodec_Decode()"。
+
+* "PyUnicode_AsDecodedUnicode()": 改用 "PyCodec_Decode()"；请注意某些
+  编解码器 (例如 "base64") 可能返回 "str" 以外的类型，比如 "bytes"。
+
+* "PyUnicode_AsEncodedObject()": 改用 "PyCodec_Encode()"。
+
+* "PyUnicode_AsEncodedUnicode()": 使用 "PyCodec_Encode()" 代替；请注意
+  ，某些编解码器（如 "base64"）可能返回 "bytes" 之外的类型，如 "str"。
+
+* Python 初始化函数，在 Python 3.13 中弃用：
+
+  * "Py_GetPath()": 改用 "PyConfig_Get("module_search_paths")"
+    ("sys.path").
+
+  * "Py_GetPrefix()": 改用 "PyConfig_Get("base_prefix")"
+    ("sys.base_prefix")。如果需要处理 虚拟环境 则使用
+    "PyConfig_Get("prefix")" ("sys.prefix").
+
+  * "Py_GetExecPrefix()": 改用 "PyConfig_Get("base_exec_prefix")"
+    ("sys.base_exec_prefix")。如果需要处理 虚拟环境 则使用
+    "PyConfig_Get("exec_prefix")" ("sys.exec_prefix").
+
+  * "Py_GetProgramFullPath()": 改用 "PyConfig_Get("executable")"
+    ("sys.executable").
+
+  * "Py_GetProgramName()": 改用 "PyConfig_Get("executable")"
+    ("sys.executable").
+
+  * "Py_GetPythonHome()": 使用 "PyConfig_Get("home")" 或 "PYTHONHOME"
+    环境变量代替。
+
+  在 Python 3.13 和更旧的版本中可以使用 pythoncapi-compat 项目 来获取
+  "PyConfig_Get()".
+
+* 用于配置 Python 的初始化的函数，在 Python 3.11 中已弃用：
+
+  * "PySys_SetArgvEx()": 改为设置 "PyConfig.argv"。
+
+  * "PySys_SetArgv()": 改为设置 "PyConfig.argv"。
+
+  * "Py_SetProgramName()": 改为设置 "PyConfig.program_name"。
+
+  * "Py_SetPythonHome()": 改为设置 "PyConfig.home"。
+
+  * "PySys_ResetWarnOptions()": 改为清除 "sys.warnoptions" 和
+    "warnings.filters".
+
+  "Py_InitializeFromConfig()" API 应与 "PyConfig" 一起使用。
+
+* 全局配置变量：
+
+  * "Py_DebugFlag": 改用 "PyConfig.parser_debug" 或
+    "PyConfig_Get("parser_debug")".
+
+  * "Py_VerboseFlag": 改用 "PyConfig.verbose" 或
+    "PyConfig_Get("verbose")".
+
+  * "Py_QuietFlag": 改用 "PyConfig.quiet" 或 "PyConfig_Get("quiet")".
+
+  * "Py_InteractiveFlag": 改用 "PyConfig.interactive" 或
+    "PyConfig_Get("interactive")".
+
+  * "Py_InspectFlag": 改用 "PyConfig.inspect" 或
+    "PyConfig_Get("inspect")".
+
+  * "Py_OptimizeFlag": 改用 "PyConfig.optimization_level" 或
+    "PyConfig_Get("optimization_level")".
+
+  * "Py_NoSiteFlag": 改用 "PyConfig.site_import" 或
+    "PyConfig_Get("site_import")".
+
+  * "Py_BytesWarningFlag": 改用 "PyConfig.bytes_warning" 或
+    "PyConfig_Get("bytes_warning")".
+
+  * "Py_FrozenFlag": 改用 "PyConfig.pathconfig_warnings" 或
+    "PyConfig_Get("pathconfig_warnings")".
+
+  * "Py_IgnoreEnvironmentFlag": 改用 "PyConfig.use_environment" 或
+    "PyConfig_Get("use_environment")".
+
+  * "Py_DontWriteBytecodeFlag": 改用 "PyConfig.write_bytecode" 或
+    "PyConfig_Get("write_bytecode")".
+
+  * "Py_NoUserSiteDirectory": 使用 "PyConfig.user_site_directory" 或
+    "PyConfig_Get("user_site_directory")" 代替。
+
+  * "Py_UnbufferedStdioFlag": 改用 "PyConfig.buffered_stdio" 或
+    "PyConfig_Get("buffered_stdio")".
+
+  * "Py_HashRandomizationFlag": 改用 "PyConfig.use_hash_seed" 和
+    "PyConfig.hash_seed" 或 "PyConfig_Get("hash_seed")".
+
+  * "Py_IsolatedFlag": 改用 "PyConfig.isolated" 或
+    "PyConfig_Get("isolated")".
+
+  * "Py_LegacyWindowsFSEncodingFlag": 改用
+    "PyPreConfig.legacy_windows_fs_encoding" 或
+    "PyConfig_Get("legacy_windows_fs_encoding")".
+
+  * "Py_LegacyWindowsStdioFlag": 改用 "PyConfig.legacy_windows_stdio"
+    或 "PyConfig_Get("legacy_windows_stdio")".
+
+  * "Py_FileSystemDefaultEncoding", "Py_HasFileSystemDefaultEncoding":
+    改用 "PyConfig.filesystem_encoding" 或
+    "PyConfig_Get("filesystem_encoding")".
+
+  * "Py_FileSystemDefaultEncodeErrors": 改用
+    "PyConfig.filesystem_errors" 或
+    "PyConfig_Get("filesystem_errors")".
+
+  * "Py_UTF8Mode": 改用 "PyPreConfig.utf8_mode" 或
+    "PyConfig_Get("utf8_mode")"。 (参见 "Py_PreInitialize()")
+
+  "Py_InitializeFromConfig()" API 应与 "PyConfig" 一起使用，以设置这些
+  选项。 或者使用 "PyConfig_Get()" 在运行时获取这些选项。

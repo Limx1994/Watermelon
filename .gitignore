@@ -1,0 +1,13 @@
+logs/
+memory/
+mcpdata/
+__pycache__/
+*.pyc
+.env
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.log
+.DS_Store

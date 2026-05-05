@@ -1,0 +1,208 @@
+"fcntl" --- "fcntl" 和 "ioctl" 系统调用
+***************************************
+
+======================================================================
+
+本模块基于文件描述符来执行文件和 I/O 控制。它是 "fcntl()" 和 "ioctl()"
+Unix 例程的接口。 请参阅 *fcntl(2)* 和 *ioctl(2)* Unix 手册页了解详情
+。
+
+适用范围: Unix, not WASI.
+
+本模块的所有函数都接受文件描述符 *fd* 作为第一个参数。可以是一个整数形
+式的文件描述符，比如 "sys.stdin.fileno()" 的返回结果，或为 "io.IOBase"
+对象，比如 "sys.stdin" 提供一个 "fileno()"，可返回一个真正的文件描述符
+。
+
+在 3.3 版本发生变更: 本模块的操作以前触发的是 "IOError"，现在则会触发
+"OSError"。
+
+在 3.8 版本发生变更: "fcntl" 模块现在包含 "F_ADD_SEALS", "F_GET_SEALS"
+和 "F_SEAL_*" 常量用于 "os.memfd_create()" 文件描述符的封包。
+
+在 3.9 版本发生变更: 在 macOS 上，"fcntl" 模块暴露了 "F_GETPATH" 常量
+，它可从文件描述符获取文件的路径。在 Linux(>=3.15) 上，"fcntl" 模块暴
+露了 "F_OFD_GETLK", "F_OFD_SETLK" 和 "F_OFD_SETLKW" 常量，它们将在处理
+打开文件描述锁时被使用。
+
+在 3.10 版本发生变更: 在 Linux >= 2.6.11 中，"fcntl" 模块暴露了
+"F_GETPIPE_SZ" 和 "F_SETPIPE_SZ" 常量，它们分别允许检查和修改管道的大
+小。
+
+在 3.11 版本发生变更: 在 FreeBSD 上，"fcntl" 模块会暴露 "F_DUP2FD" 和
+"F_DUP2FD_CLOEXEC" 常量，它们允许复制文件描述符，后者还额外设置了
+"FD_CLOEXEC" 旗标。
+
+在 3.12 版本发生变更: 在 Linux >= 4.5 上，"fcntl" 模块将对外暴露
+"FICLONE" 和 "FICLONERANGE" 常量，这允许在某些文件系统（例如 btrfs,
+OCFS2 和 XFS）上通过引用链接让一个文件与另一个文件共享某些数据。 此行
+为通常被称为“写入时拷贝”。
+
+在 3.13 版本发生变更: 在 Linux >= 2.6.32 上，"fcntl" 模块会暴露
+"F_GETOWN_EX", "F_SETOWN_EX", "F_OWNER_TID", "F_OWNER_PID",
+"F_OWNER_PGRP" 常量，它们允许针对特定线程、进程或进程组的直接 I/O 可用
+性信号。在 Linux >= 4.13 上，"fcntl" 模块会暴露 "F_GET_RW_HINT",
+"F_SET_RW_HINT", "F_GET_FILE_RW_HINT", "F_SET_FILE_RW_HINT" 和
+"RWH_WRITE_LIFE_*" 常量，它们允许向内核通知有关在给定 inode 上或通过特
+定的打开文件描述符写入的相对预计生命期。在 Linux >= 5.1 和 NetBSD 上，
+"fcntl" 模块会暴露 "F_SEAL_FUTURE_WRITE" 常量供 "F_ADD_SEALS" 和
+"F_GET_SEALS" 操作使用。在 FreeBSD 上，"fcntl" 模块会暴露
+"F_READAHEAD", "F_ISUNIONSTACK" 和 "F_KINFO" 常量。在 macOS 和 FreeBSD
+上，"fcntl" 模块会暴露 "F_RDAHEAD" 常量。在 NetBSD 和 AIX 上，"fcntl"
+模块会暴露 "F_CLOSEM" 常量。在 NetBSD 上，"fcntl" 模块会暴露 "F_MAXFD"
+常量。在 macOS 和 NetBSD 上，"fcntl" 模块会暴露 "F_GETNOSIGPIPE" 和
+"F_SETNOSIGPIPE" 常量。
+
+在 3.14 版本发生变更: 在 Linux >= 6.1 上，"fcntl" 模块暴露了
+"F_DUPFD_QUERY" 以查询指向同一文件的文件描述符。
+
+这个模块定义了以下函数：
+
+fcntl.fcntl(fd, cmd, arg=0, /)
+
+   在文件描述符 *fd* (也接受提供 "fileno()" 方法的文件对象) 上执行操作
+   *cmd*。 用作 *cmd* 的值取决于具体操作系统，并可在 "fcntl" 模块中作
+   为常量访问，并且使用的名称与相应 C 头文件中所使用的相同。 参数
+   *arg* 可以是整数值、*bytes-like object* 或字符串。 *arg* 的类型和大
+   小必须与相应 C 文件中指定的操作的参数类型和大小相匹配。
+
+   当 *arg* 是一个整数时，该函数将返回 C "fcntl()" 调用的整数返回值。
+
+   当参数是字节型的对象时，它表示一个二进制结构，例如，由
+   "struct.pack()" 创建。使用 UTF-8 编码格式将字符串值编码为二进制。
+   二进制数据被复制到一个缓冲区，该缓冲区的地址被传递给 C "fcntl()" 调
+   用。成功调用后的返回值是缓冲区的内容，转换为 "bytes" 对象。返回对象
+   的长度将与 *arg* 参数的长度相同。这限制为 1024 字节。
+
+   如果 "fcntl()" 调用失败，将引发 "OSError"。
+
+   备注:
+
+     如果 *arg* 的类型和大小与相应操作的类型和大小不匹配（例如，如果预
+     期传入一个指针却传入了一个整数，或者操作系统返回的缓冲区中的信息
+     大于 1024 字节），这就很可能导致段错误或更微妙的数据损坏。
+
+   引发一个 审计事件 "fcntl.fcntl" 并附带参数 "fd", "cmd", "arg"。
+
+   在 3.14 版本发生变更: 添加对任意 *字节型对象* 的支持，而不仅是
+   "bytes"。
+
+fcntl.ioctl(fd, request, arg=0, mutate_flag=True, /)
+
+   本函数与 "fcntl()" 函数相同，只是参数的处理更加复杂。
+
+   *request* 形参被限制为能被放入 32 或 64 个比特位的值，具体取决于所
+   在的平台。在 "termios" 模块中还包含一些可被用作 *request* 参数的额
+   外常量，其名称与相关 C 语言头文件中所使用的相同。
+
+   形参 *arg* 可以是一个整数，*bytes-like object* 或者字符串。 *arg*
+   的类型和大小必须与对应 C 文档中规定的参数的类型和大小相匹配。
+
+   如果 *arg* 不支持读写缓冲区接口或者 *mutate_flag* 为假值，则其行为
+   与 "fcntl()" 函数一样。
+
+   如果 *arg* 支持读写缓冲区接口 (就像 "bytearray") 并且 *mutate_flag*
+   为（默认的）真值，那么缓冲区（实际上）会被传给下层的 "ioctl()" 系统
+   调用，后者的返回代码则会回传给调用方 Python 对象，而缓冲区的新内容
+   将反映 "ioctl()" 的动作。这里做了一点简化，因为如果给出的缓冲区长度
+   小于 1024 字节则它会先被拷贝到一个长度为 1024 字节的静态缓冲区然后
+   再传给 "ioctl()" 并把结果拷贝回给出的缓冲区。
+
+   如果 "ioctl()" 调用失败，将引发 "OSError" 异常。
+
+   备注:
+
+     如果 *arg* 的类型和大小与对应操作的参数的类型和大小不相匹配（例如
+     ，如果预期传入一个指针却传入了一个整数，或者由操作系统返回的缓冲
+     区中的信息大于 1024 字节），这就很有可能导致段错误或更微妙的数据
+     损坏。
+
+   举个例子:
+
+      >>> import array, fcntl, struct, termios, os
+      >>> os.getpgrp()
+      13341
+      >>> struct.unpack('h', fcntl.ioctl(0, termios.TIOCGPGRP, "  "))[0]
+      13341
+      >>> buf = array.array('h', [0])
+      >>> fcntl.ioctl(0, termios.TIOCGPGRP, buf, 1)
+      0
+      >>> buf
+      array('h', [13341])
+
+   引发一个 审计事件 "fcntl.ioctl" 并附带参数 "fd", "request", "arg".
+
+   在 3.14 版本发生变更: GIL 总是在系统调用期间被释放。以 EINTR 失败的
+   系统调用会自动重试。
+
+fcntl.flock(fd, operation, /)
+
+   在文件描述符 *fd* 上执行加锁操作 *operation* (也接受能提供
+   "fileno()" 方法的文件对象)。 详见 Unix 手册  *flock(2)*。 (在某些系
+   统中，此函数是用 "fcntl()" 模拟出来的。)
+
+   如果 "flock()" 调用失败，将引发 "OSError" 异常。
+
+   引发一个 审计事件 "fcntl.flock" 并附带参数 "fd", "operation"。
+
+fcntl.lockf(fd, cmd, len=0, start=0, whence=0, /)
+
+   本质上是对 "fcntl()" 加锁调用的封装。*fd* 是要加解锁的文件描述符（
+   也接受能提供 "fileno()" 方法的文件对象），*cmd* 是以下值之一：
+
+   fcntl.LOCK_UN
+
+      释放一个已存在的锁。
+
+   fcntl.LOCK_SH
+
+      获取一个共享的锁。
+
+   fcntl.LOCK_EX
+
+      获得一个独占的锁。
+
+   fcntl.LOCK_NB
+
+      与其他三个 "LOCK_*" 常量中的任何一个进行位或操作，使请求不阻塞。
+
+   如果使用了 "LOCK_NB" 但无法获取锁，则会引发 "OSError"，异常的
+   *errno* 属性会被设置为 "EACCES" 或 "EAGAIN" (取决于操作系统；为便于
+   移植，请检查这两个值)。 至少在某些系统中，只有当文件描述符指向一个
+   已打开供写入的文件时，才能使用 "LOCK_EX"。
+
+   *len* 是要锁定的字节数，*start* 是自 *whence* 开始锁定的字节偏移量
+   ，*whence* 与 "io.IOBase.seek()" 的定义一样，具体来说：
+
+   * "0" -- 相对于文件开头 ("os.SEEK_SET")
+
+   * "1" -- 相对于当前缓冲区位置 ("os.SEEK_CUR")
+
+   * "2" -- 相对于文件末尾 ("os.SEEK_END")
+
+   *start* 的默认值为 0，表示从文件起始位置开始。*len* 的默认值是 0，
+   表示加锁至文件末尾。 *whence* 的默认值也是 0。
+
+   引发一个 审计事件 "fcntl.lockf" 并附带参数 "fd", "cmd", "len",
+   "start", "whence".
+
+示例（都是运行于符合 SVR4 的系统）:
+
+   import struct, fcntl, os
+
+   f = open(...)
+   rv = fcntl.fcntl(f, fcntl.F_SETFL, os.O_NDELAY)
+
+   lockdata = struct.pack('hhllhh', fcntl.F_WRLCK, 0, 0, 0, 0, 0)
+   rv = fcntl.fcntl(f, fcntl.F_SETLKW, lockdata)
+
+注意，在第一个例子中，返回值变量 *rv* 将存有整数；在第二个例子中，该变
+量中将存有一个 "bytes" 对象。*lockdata* 变量的结构布局视系统而定——因此
+采用 "flock()" 调用可能会更好。
+
+参见:
+
+  模块 "os"
+     如果加锁旗标 "O_SHLOCK" 和 "O_EXLOCK" 存在于 "os" 模块中（仅 BSD
+     专属），则 "os.open()" 函数提供了对 "lockf()" 和 "flock()" 函数的
+     替代。

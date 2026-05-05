@@ -1,0 +1,18 @@
+{
+  "allowed_commands": [
+    "Get-ChildItem", "Get-Content", "Remove-Item", "Copy-Item", "Move-Item",
+    "New-Item", "Set-Content", "Write-Output", "Get-Location", "Set-Location",
+    "dir", "type", "echo", "mkdir", "cd", "pwd", "ls", "rm", "cp", "mv",
+    "python", "pip", "node", "npm"
+  ],
+  "aliases": {
+    "ls": "Get-ChildItem",
+    "cat": "Get-Content",
+    "rm": "Remove-Item",
+    "pwd": "Get-Location",
+    "cd": "Set-Location",
+    "cp": "Copy-Item",
+    "mv": "Move-Item",
+    "mkdir": "New-Item"
+  }
+}

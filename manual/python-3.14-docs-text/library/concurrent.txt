@@ -1,0 +1,8 @@
+"concurrent" 包
+***************
+
+这个包里包含了下列模块：
+
+* "concurrent.futures" —— 启动并行任务
+
+* "concurrent.interpreters" —— 同一进程中的多个解释器

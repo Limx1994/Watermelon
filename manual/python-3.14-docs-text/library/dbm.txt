@@ -1,0 +1,443 @@
+"dbm" --- Unix "数据库" 接口
+****************************
+
+**源代码:** Lib/dbm/__init__.py
+
+======================================================================
+
+"dbm" 是一个针对多种 DBM 数据库的泛用接口：
+
+* "dbm.sqlite3"
+
+* "dbm.gnu"
+
+* "dbm.ndbm"
+
+如果未安装这些模块中的任何一种，则将使用 "dbm.dumb" 模块中慢速但简单的
+实现。 还有一个适用于 Oracle Berkeley DB 的 第三方接口。
+
+exception dbm.error
+
+   一个元组，其中包含每个受支持的模块可引发的异常，另外还有一个名为
+   "dbm.error" 的特殊异常作为第一项 --- 后者会在引发 "dbm.error" 时被
+   使用。
+
+dbm.whichdb(filename)
+
+   此函数会尝试猜测几种简单数据库模块中哪一个是可用的 ---
+   "dbm.sqlite3", "dbm.gnu", "dbm.ndbm" 或 "dbm.dumb" --- 并应当被用来
+   打开给定的文件。
+
+   返回下列值中的一个：
+
+   * 如果文件因其不可读或不存在而无法打开则返回 "None"
+
+   * 如果文件格式无法猜测则返回空字符串 ("''")
+
+   * 包含所需模块名称的字符串，如 "'dbm.ndbm'" 或 "'dbm.gnu'"
+
+   在 3.11 版本发生变更: *filename* 接受一个 *path-like object*。
+
+dbm.open(file, flag='r', mode=0o666)
+
+   打开一个数据库并返回相应的数据库对象。
+
+   参数:
+      * **file** (*path-like object*) -- 要打开的数据库文件。 如果数据
+        库文件已存在，则使用 "whichdb()" 来确定其类型和要使用的适当模
+        块；如果文件不存在，则会使用上述可导入子模块中的第一个。
+
+      * **flag** (*str*) --
+
+        * "'r'" (默认): Open existing database for reading only.
+
+        * "'w'": Open existing database for reading and writing.
+
+        * "'c'": Open database for reading and writing, creating it if
+          it doesn't exist.
+
+        * "'n'": Always create a new, empty database, open for reading
+          and writing.
+
+      * **mode** (*int*) -- The Unix file access mode of the file
+        (default: octal "0o666"), used only when the database has to
+        be created.
+
+   在 3.11 版本发生变更: *file* 接受一个 *path-like object*。
+
+由 "open()" 返回的对象支持可变 *映射* 的基本功能；键与其对应的值可以被
+存储、获取、删除以及迭代，还可使用 "in" 运算符以及 "keys()", "get()",
+"setdefault()" 和 "clear()" 等方法。 "keys()" 方法将返回一个列表而不是
+视图对象。 "setdefault()" 方法需要两个参数。
+
+键和值总是被存储为 "bytes"。 这意味着当使用字符串时它们会在被存储之前
+隐式地转换至默认编码格式。
+
+这些对象也支持在 "with" 语句中使用，当语句结束时将自动关闭它们。
+
+在 3.2 版本发生变更: 现在 "get()" 和 "setdefault()" 方法对所有 "dbm"
+后端均可用。
+
+在 3.4 版本发生变更: 向 "open()" 所返回的对象添加了对上下文管理协议的
+原生支持。
+
+在 3.8 版本发生变更: 从只读数据库中删除键将引发数据库模块专属的异常而
+不是 "KeyError"。
+
+在 3.13 版本发生变更: 现在 "clear()" 方法对所有 "dbm" 后端均可用。
+
+以下示例记录了一些主机名和对应的标题，随后将数据库的内容打印出来。:
+
+   import dbm
+
+   # 打开数据库，如有必要则创建它。
+   with dbm.open('cache', 'c') as db:
+
+       # 记录一些值
+       db[b'hello'] = b'there'
+       db['www.python.org'] = 'Python Website'
+       db['www.cnn.com'] = 'Cable News Network'
+
+       # 请注意现在键被作为字节串。
+       assert db[b'www.python.org'] == b'Python Website'
+       # 可以看到值现在被作为字节串。
+       assert db['www.cnn.com'] == b'Cable News Network'
+
+       # 常用的字典接口方法同样可用。
+       print(db.get('python.org', b'not present'))
+
+       # 存储非字符串的键或值将引发异常
+       # (通常为 TypeError)。
+       db['www.yahoo.com'] = 4
+
+   # 当离开 with 语句时 db 将被自动关闭。
+
+参见:
+
+  模块 "shelve"
+     存储非字符串数据的持久化模块。
+
+以下部分描述了各个单独的子模块。
+
+
+"dbm.sqlite3" --- 针对 dbm 的 SQLite 后端
+=========================================
+
+Added in version 3.13.
+
+**源代码:** Lib/dbm/sqlite3.py
+
+======================================================================
+
+此模块使用标准库 "sqlite3" 模块来提供针对 "dbm" 模块的 SQLite 后端。
+这样由 "dbm.sqlite3" 创建的文件将可通过 "sqlite3" 或任何其他 SQLite 浏
+览器包括 SQLite CLI 来打开。
+
+适用范围: not WASI.
+
+此模块在 WebAssembly 平台上无效或不可用。 请参阅 WebAssembly 平台 了解
+详情。
+
+dbm.sqlite3.open(filename, /, flag='r', mode=0o666)
+
+   打开 SQLite 数据库。
+
+   参数:
+      * **filename** (*path-like object*) -- 要打开的数据库的路径。
+
+      * **flag** (*str*) --
+
+        * "'r'" (默认): Open existing database for reading only.
+
+        * "'w'": Open existing database for reading and writing.
+
+        * "'c'": Open database for reading and writing, creating it if
+          it doesn't exist.
+
+        * "'n'": Always create a new, empty database, open for reading
+          and writing.
+
+      * **mode** -- 文件的 Unix 文件访问模式 (默认值: 八进制数
+        "0o666")，仅在需要创建数据库时使用。
+
+   返回的数据库对象行为类似于可变 *mapping*，但其 "keys()" 方法将返回
+   一个列表，而 "setdefault()" 方法需要两个参数。 它还通过 "with" 关键
+   字来支持“关闭”上下文管理器。
+
+   还提供了以下方法：
+
+   sqlite3.close()
+
+      关闭 SQLite 数据库。
+
+
+"dbm.gnu" --- GNU 数据库管理器 manager
+======================================
+
+**源代码:** Lib/dbm/gnu.py
+
+======================================================================
+
+"dbm.gnu" 模块提供了针对 GDBM (GNU dbm) 库的接口，类似于 "dbm.ndbm" 模
+块，但带有额外的功能如对崩溃的耐受性。
+
+备注:
+
+  The file formats created by "dbm.gnu" and "dbm.ndbm" are
+  incompatible and can not be used interchangeably.
+
+适用范围: not Android, not iOS, not WASI.
+
+此模块在 移动平台 或 WebAssembly 平台 上不受支持。
+
+适用范围: Unix.
+
+exception dbm.gnu.error
+
+   Raised on "dbm.gnu"-specific errors, such as I/O errors. "KeyError"
+   is raised for general mapping errors like specifying an incorrect
+   key.
+
+dbm.gnu.open_flags
+
+   由 "open()" 的 *flag* 形参所支持的字符组成的字符串。
+
+dbm.gnu.open(filename, flag='r', mode=0o666, /)
+
+   打开 GDBM 数据库并返回一个 "gdbm" 对象。
+
+   参数:
+      * **filename** (*path-like object*) -- 要打开的数据库文件。
+
+      * **flag** (*str*) --
+
+        * "'r'" (默认): Open existing database for reading only.
+
+        * "'w'": Open existing database for reading and writing.
+
+        * "'c'": Open database for reading and writing, creating it if
+          it doesn't exist.
+
+        * "'n'": Always create a new, empty database, open for reading
+          and writing.
+
+        可以添加下列额外字符来控制数据库的打开方式：
+
+        * "'f'": 以快速模式打开数据库。 对数据库的写入将不是同步的。
+
+        * "'s'": 同步模式。 对数据库的修改将立即写入到文件。
+
+        * "'u'": 不锁定数据库。
+
+        并非所有旗标都对所有 GDBM 版本可用。 请参阅 "open_flags" 成员
+        获取受支持旗标字符的列表。
+
+      * **mode** (*int*) -- The Unix file access mode of the file
+        (default: octal "0o666"), used only when the database has to
+        be created.
+
+   抛出:
+      **error** -- 如果传入了不可用的 *flag* 参数。
+
+   在 3.11 版本发生变更: *filename* 接受一个 *path-like object*。
+
+   "gdbm" 对象行为类似于可变 *映射*，但不支持 "items()", "values()",
+   "pop()", "popitem()" 和 "update()" 等方法，"keys()" 方法将返回一个
+   列表，而 "setdefault()" 方法需要两个参数。 它还通过 "with" 关键字来
+   支持“关闭”上下文管理器。
+
+   在 3.2 版本发生变更: 增加了 "get()" 和 "setdefault()" 方法。
+
+   在 3.13 版本发生变更: 增加了 "clear()" 方法。
+
+   还提供了以下方法：
+
+   gdbm.close()
+
+      关闭 GDBM 数据库。
+
+   gdbm.firstkey()
+
+      可以使用此方法和 "nextkey()" 方法循环遍历数据库中的每个键。 遍历
+      的顺序是按照 GDBM 的内部哈希值，而不会根据键的值排序。 此方法将
+      返回起始的键。
+
+   gdbm.nextkey(key)
+
+      在遍历中返回 *key* 之后的下一个键。 以下代码将打印数据库 "db" 中
+      的每个键，而不会在内存中创建一个包含所有键的列表:
+
+         k = db.firstkey()
+         while k is not None:
+             print(k)
+             k = db.nextkey(k)
+
+   gdbm.reorganize()
+
+      如果你进行了大量删除操作并且想要缩减 GDBM 文件所使用的空间，此例
+      程可以重新组织数据库。 除非使用此重组功能否则 "gdbm" 对象不会缩
+      减数据库文件大小；在其他情况下，被删除的文件空间将会保留并在添加
+      新的 (键, 值) 对时被重用。
+
+   gdbm.sync()
+
+      当以快速模式打开数据库时，此方法会将任何未写入数据强制写入磁盘。
+
+
+"dbm.ndbm" --- New Database Manager
+===================================
+
+**源代码:** Lib/dbm/ndbm.py
+
+======================================================================
+
+The "dbm.ndbm" module provides an interface to the NDBM (New Database
+Manager) library. This module can be used with the "classic" NDBM
+interface or the GDBM (GNU dbm) compatibility interface.
+
+备注:
+
+  The file formats created by "dbm.gnu" and "dbm.ndbm" are
+  incompatible and can not be used interchangeably.
+
+警告:
+
+  作为 macOS 的组成部分提供的 NDBM 库对值的大小有一个未写入文档的限制
+  ，当存储的值大于此限制时可能会导致数据库文件损坏。 读取这种已损坏的
+  文件可能会导致硬崩溃（段错误）。
+
+适用范围: not Android, not iOS, not WASI.
+
+此模块在 移动平台 或 WebAssembly 平台 上不受支持。
+
+适用范围: Unix.
+
+exception dbm.ndbm.error
+
+   Raised on "dbm.ndbm"-specific errors, such as I/O errors.
+   "KeyError" is raised for general mapping errors like specifying an
+   incorrect key.
+
+dbm.ndbm.library
+
+   所使用的 NDBM 实现库的名称。
+
+dbm.ndbm.open(filename, flag='r', mode=0o666, /)
+
+   打开 NDBM 数据库并返回一个 "ndbm" 对象。
+
+   参数:
+      * **filename** (*path-like object*) -- 数据库文件的基本名（不带
+        ".dir" 或 ".pag" 扩展名）。
+
+      * **flag** (*str*) --
+
+        * "'r'" (默认): Open existing database for reading only.
+
+        * "'w'": Open existing database for reading and writing.
+
+        * "'c'": Open database for reading and writing, creating it if
+          it doesn't exist.
+
+        * "'n'": Always create a new, empty database, open for reading
+          and writing.
+
+      * **mode** (*int*) -- The Unix file access mode of the file
+        (default: octal "0o666"), used only when the database has to
+        be created.
+
+   在 3.11 版本发生变更: 接受 *path-like object* 作为文件名。
+
+   "ndbm" 对象行为类似于可变 *映射*，但不支持 "items()", "values()",
+   "pop()", "popitem()" 和 "update()" 等方法，"keys()" 方法将返回一个
+   列表，而 "setdefault()" 方法需要两个参数。 它还通过 "with" 关键字来
+   支持“关闭”上下文管理器。
+
+   在 3.2 版本发生变更: 增加了 "get()" 和 "setdefault()" 方法。
+
+   在 3.13 版本发生变更: 增加了 "clear()" 方法。
+
+   还提供了以下方法：
+
+   ndbm.close()
+
+      关闭 NDBM 数据库。
+
+
+"dbm.dumb" --- Portable DBM implementation
+==========================================
+
+**源代码:** Lib/dbm/dumb.py
+
+备注:
+
+  The "dbm.dumb" module is intended as a last resort fallback for the
+  "dbm" module when a more robust module is not available. The
+  "dbm.dumb" module is not written for speed and is not nearly as
+  heavily used as the other database modules.
+
+======================================================================
+
+The "dbm.dumb" module provides a persistent "dict"-like interface
+which is written entirely in Python. Unlike other "dbm" backends, such
+as "dbm.gnu", no external library is required.
+
+"dbm.dumb" 模块定义了以下对象：
+
+exception dbm.dumb.error
+
+   Raised on "dbm.dumb"-specific errors, such as I/O errors.
+   "KeyError" is raised for general mapping errors like specifying an
+   incorrect key.
+
+dbm.dumb.open(filename, flag='c', mode=0o666)
+
+   打开 "dbm.dumb" 数据库。
+
+   参数:
+      * **filename** -- 数据库文件的基本名（不带扩展名）。 新数据库将
+        会创建以下文件:  - "*filename*.dat" - "*filename*.dir"
+
+      * **flag** (*str*) --
+
+        * "'r'": Open existing database for reading only.
+
+        * "'w'": Open existing database for reading and writing.
+
+        * "'c'" (默认): Open database for reading and writing,
+          creating it if it doesn't exist.
+
+        * "'n'": Always create a new, empty database, open for reading
+          and writing.
+
+      * **mode** (*int*) -- The Unix file access mode of the file
+        (default: octal "0o666"), used only when the database has to
+        be created.
+
+   警告:
+
+     当载入包含足够巨大/复杂条目的数据库时有可能导致 Python 解释器的崩
+     溃，这是由于 Python AST 编译器有栈深度限制。
+
+   在 3.5 版本发生变更: "open()" 在 *flag* 为 "'n'" 时将总是创建一个新
+   数据库。
+
+   在 3.8 版本发生变更: 如果 *flag* 为 "'r'" 则打开的数据库将为只读的
+   。 如果 *flag* 为 "'r'" 或 "'w'" 则当数据库不存在时不会自动创建它。
+
+   在 3.11 版本发生变更: *filename* 接受一个 *path-like object*。
+
+   返回的数据库对象行为类似于可变 *mapping*，但 "keys()" 和 "items()"
+   将返回列表，而 "setdefault()" 方法需要两个参数。 它还通过 "with" 关
+   键字支持“关闭”上下文管理器。
+
+   还提供了以下方法：
+
+   dumbdbm.close()
+
+      关闭数据库。
+
+   dumbdbm.sync()
+
+      同步磁盘上的目录和数据文件。 此方法将被 "shelve.Shelf.sync()" 方
+      法调用。

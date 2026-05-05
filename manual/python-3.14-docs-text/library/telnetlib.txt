@@ -1,0 +1,12 @@
+"telnetlib" --- Telnet 客户端
+*****************************
+
+从 3.11 版起已弃用，已在 3.13 版中移除.
+
+此模块已不再是 Python 标准库的一部分。它在 Python 3.11 中被弃用后又在
+Python 3.13 中被移除。移除计划是在 **PEP 594** 确定的。
+
+可用的替代有来自 PyPI 的第三方库：telnetlib3 或 Exscript。它们不被
+Python 核心团队所支持或维护。
+
+提供 "telnetlib" 模块的最后一个 Python 版本是 Python 3.12.

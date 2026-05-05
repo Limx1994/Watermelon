@@ -1,0 +1,172 @@
+计划在未来版本中移除
+********************
+
+以下 API 将会被移除，尽管具体时间还未确定。
+
+* "argparse":
+
+  * 嵌套参数组和嵌套互斥组已被弃用。
+
+  * 将未写入文档的关键字参数 *prefix_chars* 传递给
+    "add_argument_group()" 的做法现在已被弃用。
+
+  * "argparse.FileType" 类型转换器已弃用。
+
+* "builtins":
+
+  * 生成器："throw(type, exc, tb)" 和 "athrow(type, exc, tb)" 签名已被
+    弃用：请改用 "throw(exc)" 和 "athrow(exc)"，即单参数签名。
+
+  * 目前 Python 接受数字类字面值后面紧跟关键字的写法，例如 "0in x",
+    "1or x", "0if 1else 2"。它允许像 "[0x1for x in y]" 这样令人困惑且
+    有歧义的表达式 (它可以被解读为 "[0x1 for x in y]" 或者 "[0x1f or x
+    in y]")。如果数字类字面值后面紧跟关键字 "and", "else", "for",
+    "if", "in", "is" 和 "or" 中的一个将会引发语法警告。在未来的版本中
+    它将改为语法错误。 (gh-87999)
+
+  * 对 "__index__()" 和 "__int__()" 方法返回非 int 类型的支持：将要求
+    这些方法必须返回 "int" 的严格子类的实例。
+
+  * 对 "__float__()" 方法返回 "float" 的子类的支持：将要求这些方法必须
+    返回 "float" 的实例。
+
+  * 对 "__complex__()" 方法返回 "complex" 的子类的支持：将要求这些方法
+    必须返回 "complex" 的实例。
+
+  * 传入一个复数作为 "complex()" 构造器中的 *real* 或 *imag* 参数的做
+    法现在已被弃用；它应当仅作为单个位置参数被传入。 （由 Serhiy
+    Storchaka 在 gh-109218 中贡献。）
+
+* "calendar": "calendar.January" 和 "calendar.February" 常量已被弃用并
+  由 "calendar.JANUARY" 和 "calendar.FEBRUARY" 替代。 （由 Prince
+  Roshan 在 gh-103636 中贡献。）
+
+* "codecs": 请改用 "open()" 代替 "codecs.open()"。 (gh-133038)
+
+* "codeobject.co_lnotab": 改用 "codeobject.co_lines()" 方法。
+
+* "datetime":
+
+  * "utcnow()": 使用 "datetime.datetime.now(tz=datetime.UTC)"。
+
+  * "utcfromtimestamp()": 使用
+    "datetime.datetime.fromtimestamp(timestamp, tz=datetime.UTC)"。
+
+* "gettext": 复数值必须是一个整数。
+
+* "importlib":
+
+  * "cache_from_source()" *debug_override* 形参已被弃用：改用
+    *optimization* 形参。
+
+* "importlib.metadata":
+
+  * "EntryPoints" 元组接口。
+
+  * 返回值中隐式的 "None"。
+
+* "logging": "warn()" 方法自 Python 3.3 起已被弃用，请改用 "warning()"
+  。
+
+* "mailbox": 对 StringIO 输入和文本模式的使用已被弃用，改用 BytesIO 和
+  二进制模式。
+
+* "os": 在多线程的进程中调用 "os.register_at_fork()"。
+
+* "pydoc.ErrorDuringImport": 使用元组值作为 *exc_info* 形参的做法已被
+  弃用，应使用异常实例。
+
+* "re": 现在对于正则表达式中的数字分组引用和分组名称将应用更严格的规则
+  。现在只接受 ASCII 数字序列作为数字引用。 字节串模式和替换字符串中的
+  分组名称现在只能包含 ASCII 字母和数字以及下划线。 （由 Serhiy
+  Storchaka 在 gh-91760 中贡献。）
+
+* "sre_compile", "sre_constants" 和 "sre_parse" 模块。
+
+* "shutil": "rmtree()" 的 *onerror* 形参在 Python 3.12 中已被弃用；请
+  改用 *onexc* 形参。
+
+* "ssl" 选项和协议：
+
+  * "ssl.SSLContext" 不带 protocol 参数的做法已被弃用。
+
+  * "ssl.SSLContext": "set_npn_protocols()" 和
+    "selected_npn_protocol()" 已被弃用：请改用 ALPN。
+
+  * "ssl.OP_NO_SSL*" 选项
+
+  * "ssl.OP_NO_TLS*" 选项
+
+  * "ssl.PROTOCOL_SSLv3"
+
+  * "ssl.PROTOCOL_TLS"
+
+  * "ssl.PROTOCOL_TLSv1"
+
+  * "ssl.PROTOCOL_TLSv1_1"
+
+  * "ssl.PROTOCOL_TLSv1_2"
+
+  * "ssl.TLSVersion.SSLv3"
+
+  * "ssl.TLSVersion.TLSv1"
+
+  * "ssl.TLSVersion.TLSv1_1"
+
+* "threading" 的方法：
+
+  * "threading.Condition.notifyAll()": 使用 "notify_all()"。
+
+  * "threading.Event.isSet()": 使用 "is_set()"。
+
+  * "threading.Thread.isDaemon()", "threading.Thread.setDaemon()": 使
+    用 "threading.Thread.daemon" 属性。
+
+  * "threading.Thread.getName()", "threading.Thread.setName()": 使用
+    "threading.Thread.name" 属性。
+
+  * "threading.currentThread()": 使用 "threading.current_thread()"。
+
+  * "threading.activeCount()": 使用 "threading.active_count()"。
+
+* "typing.Text" (gh-92332)。
+
+* 内部类 "typing._UnionGenericAlias" 不再用于实现 "typing.Union"。 为
+  了保持与使用该私有类的用户的兼容性，将至少在 Python 3.17 之前提供兼
+  容性垫片。 （由 Jelle Zijlstra 在 gh-105499 中贡献。）
+
+* "unittest.IsolatedAsyncioTestCase": 从测试用例返回不为 "None" 的值的
+  做法已被弃用。
+
+* "urllib.parse" 已弃用的函数：改用 "urlparse()"
+
+  * "splitattr()"
+
+  * "splithost()"
+
+  * "splitnport()"
+
+  * "splitpasswd()"
+
+  * "splitport()"
+
+  * "splitquery()"
+
+  * "splittag()"
+
+  * "splittype()"
+
+  * "splituser()"
+
+  * "splitvalue()"
+
+  * "to_bytes()"
+
+* "wsgiref": "SimpleHandler.stdout.write()" 不应执行部分写入。
+
+* "xml.etree.ElementTree": 对 "Element" 进行真值检测已被弃用。在未来的
+  发布版中它将始终返回 "True"。建议改用显式的 "len(elem)" 或 "elem is
+  not None" 检测。
+
+* "sys._clear_type_cache()" 已被弃用，请改用
+  "sys._clear_internal_caches()"。

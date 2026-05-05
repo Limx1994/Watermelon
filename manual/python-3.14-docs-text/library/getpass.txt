@@ -1,0 +1,60 @@
+"getpass" --- 可移植的密码输入
+******************************
+
+**源代码:** Lib/getpass.py
+
+======================================================================
+
+适用范围: not WASI.
+
+此模块在 WebAssembly 平台上无效或不可用。请参阅 WebAssembly 平台 了解
+详情。
+
+"getpass" 模块提供了两个函数：
+
+getpass.getpass(prompt='Password: ', stream=None, *, echo_char=None)
+
+   提示用户输入一个密码且不会回显。用户会看到字符串 *prompt* 作为提示
+   ，其默认值为 "'Password: '"。在 Unix 上，如有必要提示会使用替换错误
+   句柄写入到文件型对象 *stream*。 *stream* 默认指向控制终端
+   ("/dev/tty")，如果不可用则指向 "sys.stderr" (此参数在 Windows 上会
+   被忽略)。
+
+   *echo_char* 参数控制在按键时用户输入将如何显示。如果 *echo_char* 为
+   "None" (默认值)，输入将保持隐藏。 在其他情况下，*echo_char* 必须是
+   一个可打印的 ASCII 字符而每个键入的字符将由它来替换。例如，
+   "echo_char='*'" 将显示星号而不是实际输入内容。
+
+   如果无回显输入不可用，则 getpass() 将回退为向 *stream* 打印一条警告
+   消息，并从 "sys.stdin" 读取且发出 "GetPassWarning".
+
+   备注:
+
+     如果你从 IDLE 内部调用 getpass，输入可能是在你启动 IDLE 的终端中
+     而非在 IDLE 窗口本身中完成。
+
+   备注:
+
+     在 Unix 系统上，当设置了 *echo_char* 时，终端将被配置为以 *非规范
+     模式* 运行。特别地，这意味着诸如 "Ctrl"+"U" 之类的行编辑快捷键将
+     不起作用，并可能在输入中插入意外字符。
+
+   在 3.14 版本发生变更: 添加了 *echo_char* 形参用于键盘反馈。
+
+exception getpass.GetPassWarning
+
+   一个当密码输入可能被回显时发出的 "UserWarning" 子类。
+
+getpass.getuser()
+
+   返回用户的“登录名称”。
+
+   此函数会按顺序检查环境变量 "LOGNAME", "USER", "LNAME" 和 "USERNAME"
+   ，并返回其中第一个被设为非空字符串的值。如果全都未设置，则在支持
+   "pwd" 模块的系统上将返回来自密码数据库的登录名，在其他情况下，将会
+   引发 "OSError"。
+
+   通常情况下，此函数应优先于 "os.getlogin()"。
+
+   在 3.13 版本发生变更: 在之前版本中，除了 "OSError" 之外还会引发其他
+   多种异常。
