@@ -1,11 +1,11 @@
-# AGImyCLI
+# WatermelonCLI
 
 A TUI (Text User Interface) AGI interaction tool inspired by Claude Code, built with Python.
 
 ## Features
 
 - **REPL-style interaction**: Chat with AI through a terminal interface
-- **Tool system**: All tools configured as external executables via tools.json (read_file, write_file, shell, grep, glob)
+- **Tool system**: All tools configured as external executables via tools.json (read_file, write_file, shell, grep, glob, edit)
 - **MCP support**: Connect to Model Context Protocol servers (Tavily search, Sequential Thinking, etc.)
 - **Mouse interaction**: Mouse wheel scrolling, text selection, click-to-focus input
 - **Memory persistence**: Conversation history saved between sessions, auto-summary for long conversations
@@ -52,9 +52,6 @@ AGImyCLI/
 │   ├── tools/
 │   │   ├── base.py          # Tool base class and ToolResult
 │   │   ├── registry.py      # Tool registry (singleton)
-│   │   ├── shell.py         # Shell execution tool
-│   │   ├── grep.py          # Content search tool
-│   │   ├── glob.py          # File pattern matching tool
 │   │   ├── loader.py        # External tool loader
 │   │   └── external.py      # External CLI tool executor
 │   ├── mcp/
@@ -69,7 +66,8 @@ AGImyCLI/
 │   │   └── tavily_client.py # Tavily MCP client
 │   └── utils/
 │       ├── path.py          # Path utilities
-│       └── token_counter.py # Token counting
+│       ├── token_counter.py  # Token counting
+│       └── logging.py       # Logging utilities
 ├── external_tools/           # External compiled .exe tools
 │   ├── read_file/           # File reading tool
 │   ├── write_file/          # File writing tool
@@ -144,8 +142,6 @@ Supported MCP server types:
 
 ## External Tools
 
-All tools are external .exe programs defined in `tools.json` and communicate via JSON through stdin/stdout.
-
 External tools are compiled .exe programs defined in `tools.json` and communicate via JSON through stdin/stdout.
 
 | Tool | Command | Description |
@@ -155,6 +151,7 @@ External tools are compiled .exe programs defined in `tools.json` and communicat
 | `shell` | `external_tools/winshell/dist/winshell.exe` | Execute PowerShell commands (whitelist validation) |
 | `grep` | `external_tools/grep/dist/grep.exe` | Search file contents (regex, output modes, context, type filter, pagination) |
 | `glob` | `external_tools/glob/dist/glob.exe` | Find files by pattern (max 50 results) |
+| `edit` | `external_tools/edit/dist/edit.exe` | Precise string replacement (quote normalization, replace_all support) |
 
 Example in `tools.json`:
 ```json

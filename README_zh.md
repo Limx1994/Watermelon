@@ -5,7 +5,7 @@
 ## 功能特点
 
 - **REPL 风格交互**：通过终端界面与 AI 对话
-- **工具系统**：所有工具通过 tools.json 配置为外部可执行文件（read_file、write_file、shell、grep、glob）
+- **工具系统**：所有工具通过 tools.json 配置为外部可执行文件（read_file、write_file、shell、grep、glob、edit）
 - **MCP 支持**：连接 Model Context Protocol 服务器（Tavily 搜索、Sequential Thinking 等）
 - **鼠标交互**：鼠标滚轮滚动、文本选择、点击聚焦输入
 - **记忆持久化**：会话历史持久保存，长对话自动摘要
@@ -52,9 +52,6 @@ AGImyCLI/
 │   ├── tools/
 │   │   ├── base.py          # 工具基类和 ToolResult
 │   │   ├── registry.py      # 工具注册表（单例模式）
-│   │   ├── shell.py         # Shell 执行工具
-│   │   ├── grep.py          # 内容搜索工具
-│   │   ├── glob.py          # 文件模式匹配工具
 │   │   ├── loader.py        # 外部工具加载器
 │   │   └── external.py      # 外部 CLI 工具执行器
 │   ├── mcp/
@@ -69,7 +66,8 @@ AGImyCLI/
 │   │   └── tavily_client.py # Tavily MCP 客户端
 │   └── utils/
 │       ├── path.py          # 路径工具函数
-│       └── token_counter.py # Token 计数
+│       ├── token_counter.py # Token 计数
+│       └── logging.py       # 日志工具
 ├── external_tools/           # 外部编译的 .exe 工具
 │   ├── read_file/           # 文件读取工具
 │   ├── write_file/          # 文件写入工具
@@ -144,8 +142,6 @@ AGImyCLI/
 
 ## 外部工具
 
-所有工具均为外部 .exe 程序，在 `tools.json` 中定义，通过 JSON 在 stdin/stdout 上通信。
-
 外部工具是编译后的 .exe 程序，在 `tools.json` 中定义，通过 JSON 在 stdin/stdout 上通信。
 
 | 工具 | 命令 | 说明 |
@@ -155,6 +151,7 @@ AGImyCLI/
 | `shell` | `external_tools/winshell/dist/winshell.exe` | 执行 PowerShell 命令（白名单验证） |
 | `grep` | `external_tools/grep/dist/grep.exe` | 搜索文件内容（正则，输出模式，上下文，类型过滤，分页） |
 | `glob` | `external_tools/glob/dist/glob.exe` | 按模式查找文件（最多 50 条） |
+| `edit` | `external_tools/edit/dist/edit.exe` | 精确字符串替换（引号规范化，replace_all 支持） |
 
 `tools.json` 示例：
 ```json

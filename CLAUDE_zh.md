@@ -25,9 +25,6 @@ AGImyCLI/
 │   │   ├── base.py          # 工具基类（BaseTool 抽象类，ToolResult）
 │   │   ├── registry.py      # 工具注册表（ToolRegistry 单例）
 │   │   ├── loader.py        # 外部工具加载器（load_external_tools）
-│   │   ├── shell.py         #（已废弃，使用 winshell.exe）
-│   │   ├── grep.py          #（已废弃，使用 grep.exe）
-│   │   ├── glob.py          #（已废弃，使用 glob.exe）
 │   │   └── external.py      # ExternalTool 执行器
 │   ├── mcp/
 │   │   ├── base.py          # 抽象 MCP 客户端基类（BaseMCPClient）
@@ -41,13 +38,15 @@ AGImyCLI/
 │   │   └── tavily_client.py # Tavily MCP 客户端（TavilyMCPClient）
 │   └── utils/
 │       ├── path.py          # 路径工具函数（get_project_root, resolve_path）
-│       └── token_counter.py # Token 计数（count_tokens）
+│       ├── token_counter.py # Token 计数（count_tokens）
+│       └── logging.py       # 日志工具
 ├── external_tools/           # 外部编译的 .exe 工具
 │   ├── read_file/           # 文件读取工具
 │   ├── write_file/          # 文件写入工具
 │   ├── winshell/            # Shell 执行器（带白名单验证）
 │   ├── grep/                # 内容搜索工具
-│   └── glob/                 # 文件模式匹配工具
+│   ├── glob/                 # 文件模式匹配工具
+│   └── edit/                 # 字符串替换工具
 ├── manual/                  # 参考手册
 ├── memory/                  # 记忆存储
 ├── logs/                    # 日志文件
@@ -78,7 +77,7 @@ AGImyCLI/
 | `display` | `show_thinking` | 显示思考过程 | `true` |
 | | `thinking_indicator` | 思考指示器文字 | `思考中` |
 | `system_prompt` | `path` | 系统提示词文件路径 | `./systsc.md` |
-| `tools` | `enabled` | 启用的外部工具列表（在 tools.json 中配置） | `["shell", "read_file", "write_file", "grep", "glob"]` |
+| `tools` | `enabled` | 启用的外部工具列表（在 tools.json 中配置） | `["shell", "read_file", "write_file", "grep", "glob", "edit"]` |
 | `memory` | `path` | 对话存储路径 | `./memory/conversation.json` |
 | | `auto_summary` | 长历史自动摘要 | `true` |
 | `logs` | `path` | 日志文件路径 | `./logs/agent.log` |
@@ -104,7 +103,7 @@ AGImyCLI/
 
 ## 工具系统
 
-所有工具均为外部 .exe 程序，通过 `tools.json` 定义，由 `load_external_tools()` 加载。不再存在内置 Python 工具。
+所有工具均为外部 .exe 程序，通过 `tools.json` 定义，由 `load_external_tools()` 加载。内置 Python 工具已全部移除。
 
 ### 外部工具 (external_tools/)
 
@@ -115,6 +114,7 @@ AGImyCLI/
 | `shell` | ExternalTool | 执行 PowerShell 命令（白名单验证） |
 | `grep` | ExternalTool | 正则搜索文件内容（输出模式：content/files/count，上下文行，类型过滤，head-limit/offset 分页，多行模式） |
 | `glob` | ExternalTool | 文件模式匹配（最多 50 条结果） |
+| `edit` | ExternalTool | 精确替换文件中的字符串。old_string 必须与文件内容完全一致，支持引号规范化（弯引号/直引号），支持 replace_all 批量替换。 |
 
 ### 工具基类 (base.py)
 
@@ -210,6 +210,27 @@ class ExternalTool:
         "pages": { "type": "string", "description": "PDF页码范围，如 '1-5'（仅对PDF有效）" }
       },
       "required": ["path"]
+    }
+  }
+}
+```
+
+### edit 工具 Schema
+
+```json
+{
+  "function": {
+    "name": "edit",
+    "description": "精确替换文件中的字符串。需先 Read 文件才能编辑。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "file_path": { "type": "string", "description": "文件绝对路径（不支持 ~ 路径简写）" },
+        "old_string": { "type": "string", "description": "要替换的文本（必须与文件内容完全一致）" },
+        "new_string": { "type": "string", "description": "替换文本（必须与 old_string 不同）" },
+        "replace_all": { "type": "boolean", "description": "是否替换所有出现（默认 false）", "default": false }
+      },
+      "required": ["file_path", "old_string", "new_string"]
     }
   }
 }

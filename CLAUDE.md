@@ -25,9 +25,6 @@ AGImyCLI/
 │   │   ├── base.py          # Tool base class (BaseTool ABC, ToolResult)
 │   │   ├── registry.py      # Tool registry (ToolRegistry singleton)
 │   │   ├── loader.py        # External tool loader (load_external_tools)
-│   │   ├── shell.py         # (deprecated, use winshell.exe)
-│   │   ├── grep.py          # (deprecated, use grep.exe)
-│   │   ├── glob.py          # (deprecated, use glob.exe)
 │   │   └── external.py      # ExternalTool executor
 │   ├── mcp/
 │   │   ├── base.py          # Abstract MCP client base class (BaseMCPClient)
@@ -41,13 +38,15 @@ AGImyCLI/
 │   │   └── tavily_client.py # Tavily MCP client (TavilyMCPClient)
 │   └── utils/
 │       ├── path.py          # Path utilities (get_project_root, resolve_path)
-│       └── token_counter.py # Token counting (count_tokens)
+│       ├── token_counter.py # Token counting (count_tokens)
+│       └── logging.py       # Logging utilities
 ├── external_tools/           # External compiled .exe tools
 │   ├── read_file/           # File reading tool
 │   ├── write_file/          # File writing tool
 │   ├── winshell/            # Shell executor with whitelist validation
 │   ├── grep/                # Content search tool
-│   └── glob/                 # File pattern matching tool
+│   ├── glob/                 # File pattern matching tool
+│   └── edit/                 # String replacement tool
 ├── manual/                  # Reference manuals
 ├── memory/                  # Memory storage
 ├── logs/                    # Log files
@@ -78,7 +77,7 @@ AGImyCLI/
 | `display` | `show_thinking` | Show thinking process | `true` |
 | | `thinking_indicator` | Thinking indicator text | `思考中` |
 | `system_prompt` | `path` | Path to system prompt file | `./systsc.md` |
-| `tools` | `enabled` | List of enabled external tools (configured in tools.json) | `["shell", "read_file", "write_file", "grep", "glob"]` |
+| `tools` | `enabled` | List of enabled external tools (configured in tools.json) | `["shell", "read_file", "write_file", "grep", "glob", "edit"]` |
 | `memory` | `path` | Conversation storage path | `./memory/conversation.json` |
 | | `auto_summary` | Auto-summarize long history | `true` |
 | `logs` | `path` | Log file path | `./logs/agent.log` |
@@ -104,7 +103,7 @@ AGImyCLI/
 
 ## Tool System
 
-All tools are external .exe programs defined in `tools.json` and loaded via `load_external_tools()`. No built-in Python tools remain.
+All tools are external .exe programs defined in `tools.json` and loaded via `load_external_tools()`. Built-in Python tools have been removed.
 
 ### External Tools (external_tools/)
 
@@ -115,6 +114,7 @@ All tools are external .exe programs defined in `tools.json` and loaded via `loa
 | `shell` | ExternalTool | Execute PowerShell commands (whitelist validation) |
 | `grep` | ExternalTool | Regex search in files (output modes: content/files/count, context lines, type filter, head-limit/offset pagination, multiline mode) |
 | `glob` | ExternalTool | Pattern matching for files (max 50 results) |
+| `edit` | ExternalTool | Precise string replacement in files. old_string must match exactly, supports quote normalization (curly/straight quotes), supports replace_all for batch replacement. |
 
 ### Tool Base Classes (base.py)
 
@@ -210,6 +210,27 @@ Output types:
         "pages": { "type": "string", "description": "PDF page range like '1-5' (PDF only)" }
       },
       "required": ["path"]
+    }
+  }
+}
+```
+
+### edit Tool Schema
+
+```json
+{
+  "function": {
+    "name": "edit",
+    "description": "Precise string replacement in files. File must be read first before editing.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "file_path": { "type": "string", "description": "File absolute path (~ not supported)" },
+        "old_string": { "type": "string", "description": "String to replace (must match file content exactly)" },
+        "new_string": { "type": "string", "description": "Replacement string (must differ from old_string)" },
+        "replace_all": { "type": "boolean", "description": "Replace all occurrences (default false)", "default": false }
+      },
+      "required": ["file_path", "old_string", "new_string"]
     }
   }
 }
