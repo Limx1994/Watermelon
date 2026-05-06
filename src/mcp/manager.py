@@ -95,6 +95,13 @@ class MCPManager:
                 "error": f"Tool '{tool_name}' not found"
             }
 
+        if not isinstance(arguments, dict):
+            return {
+                "success": False,
+                "content": "",
+                "error": f"Invalid arguments type: {type(arguments).__name__}"
+            }
+
         server_name, client = result
         try:
             return client.call_tool(tool_name, arguments)

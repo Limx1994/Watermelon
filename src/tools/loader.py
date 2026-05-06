@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Dict, Any, List
 
@@ -9,6 +10,9 @@ from .external import ExternalTool
 from .registry import registry
 
 logger = logging.getLogger(__name__)
+
+# 工具名格式验证正则
+_TOOL_NAME_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
 
 
 def get_project_root() -> Path:
@@ -50,6 +54,9 @@ def load_external_tools(tools_json_path: str = None) -> None:
         schema = func.get("parameters", {})
 
         if name:
+            if not _TOOL_NAME_RE.match(name):
+                logger.warning(f"Invalid tool name format: {name}, skipping")
+                continue
             external_tool = ExternalTool(
                 name=name,
                 description=description,

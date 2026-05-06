@@ -119,6 +119,8 @@ class SimpleTUI:
         # Agent safety
         self._agent_running = False
         self._agent_stop_event = threading.Event()
+        self._exit_requested = False
+        self._poll_task: Optional[asyncio.Task] = None
 
         # Read-only Buffer for output text with native selection support
         self._output_buffer = Buffer(read_only=True)
@@ -369,14 +371,18 @@ class SimpleTUI:
             if self._agent_running:
                 self._agent_stop_event.set()
                 self._output_queue.put(("text", "\n[Cancelling agent...]\n"))
-            event.app.exit()
+                self._exit_requested = True
+            else:
+                event.app.exit()
 
         @kb.add(Keys.ControlQ, eager=True)
         def quit(event):
             if self._agent_running:
                 self._agent_stop_event.set()
                 self._output_queue.put(("text", "\n[Cancelling agent...]\n"))
-            event.app.exit()
+                self._exit_requested = True
+            else:
+                event.app.exit()
 
         @kb.add(Keys.ControlL)
         def clear_output(event):
@@ -479,13 +485,13 @@ class SimpleTUI:
                 return
             if text[pos - 1] == '\n':
                 # 在第二行开头，按左键跳到第一行末尾
-                prev_nl = text.rfind('\n', 0, pos - 1)  # 找上一个换行符
+                prev_nl = text.rfind('\n', 0, pos - 1)
                 if prev_nl >= 0:
-                    # 上一行末尾是 prev_nl 之后到当前换行符之前的最长行
-                    line_end = prev_nl + 1
-                    while line_end < pos - 1 and text[line_end] == '\n':
-                        line_end += 1
-                    buf._set_cursor_position(line_end - 1)
+                    # 从pos-1向前找第一个非\n字符，即上一行末尾
+                    target = pos - 1
+                    while target > prev_nl and text[target] == '\n':
+                        target -= 1
+                    buf._set_cursor_position(max(prev_nl, target))
                 else:
                     buf._set_cursor_position(0)
             else:
@@ -582,6 +588,9 @@ class SimpleTUI:
                 # Process one message
                 if msg_type == "_agent_done":
                     self._agent_running = False
+                    if self._exit_requested:
+                        self._exit_requested = False
+                        self.app.exit()
                     continue
 
                 elif msg_type == "thinking":
@@ -638,8 +647,12 @@ class SimpleTUI:
         self._rebuild_buffer()
 
         async def _main():
-            asyncio.create_task(self._poll_output_queue())
-            await self.app.run_async()
+            self._poll_task = asyncio.create_task(self._poll_output_queue())
+            try:
+                await self.app.run_async()
+            finally:
+                if self._poll_task:
+                    self._poll_task.cancel()
 
         try:
             asyncio.run(_main())

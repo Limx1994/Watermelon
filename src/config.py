@@ -1,31 +1,45 @@
 """Configuration management - reads from config.json"""
 
 import json
+import logging
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .utils.path import resolve_path, get_project_root
+
+logger = logging.getLogger(__name__)
 
 
 class Config:
     """Configuration manager that reads from config.json"""
 
     _instance: Optional["Config"] = None
+    _lock = threading.Lock()
     _config: Dict[str, Any] = {}
     _mcp_config: Dict[str, Any] = {}
 
     def __new__(cls) -> "Config":
         if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._load_config()
-            cls._instance._load_mcp_config()
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._load_config()
+                    cls._instance._load_mcp_config()
         return cls._instance
 
     def _load_config(self) -> None:
         """Load configuration from config.json"""
         config_path = resolve_path("config.json")
-        with open(config_path, "r", encoding="utf-8") as f:
-            self._config = json.load(f)
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                self._config = json.load(f)
+        except FileNotFoundError:
+            logger.warning(f"config.json not found at {config_path}, using defaults")
+            self._config = {}
+        except json.JSONDecodeError as e:
+            logger.warning(f"config.json parse error: {e}, using defaults")
+            self._config = {}
 
     def _load_mcp_config(self) -> None:
         """Load MCP configuration from mcp.json
@@ -81,7 +95,7 @@ class Config:
 
     @property
     def temperature(self) -> float:
-        return self._config.get("openai", {}).get("temperature", 0.9)
+        return self._config.get("openai", {}).get("temperature", 0.7)
 
     @property
     def top_p(self) -> float:
@@ -89,11 +103,11 @@ class Config:
 
     @property
     def reasoning_effort(self) -> str:
-        return self._config.get("openai", {}).get("reasoning_effort", "MAX")
+        return self._config.get("openai", {}).get("reasoning_effort", "max")
 
     @property
     def context_window(self) -> int:
-        value = self._config.get("openai", {}).get("context_window", 200000)
+        value = self._config.get("openai", {}).get("context_window", 1000)
         # If value < 1000, treat it as "K" (e.g., 200 means 200K = 200000)
         if value < 1000:
             value = value * 1000
@@ -131,12 +145,16 @@ class Config:
         return self._config.get("system_prompt", {}).get("path", "./systsc.md")
 
     def get_system_prompt(self) -> str:
-        """Read system prompt from file"""
-        try:
-            path = resolve_path(self.system_prompt_path.lstrip("./"))
-            return path.read_text(encoding="utf-8")
-        except Exception:
-            return "You are a helpful AI assistant."
+        """Read system prompt from file with caching"""
+        if not hasattr(self, "_system_prompt_cache"):
+            self._system_prompt_cache: Optional[str] = None
+        if self._system_prompt_cache is None:
+            try:
+                path = resolve_path(self.system_prompt_path.lstrip("./"))
+                self._system_prompt_cache = path.read_text(encoding="utf-8")
+            except Exception:
+                self._system_prompt_cache = "You are a helpful AI assistant."
+        return self._system_prompt_cache
 
     # Tools Configuration
     @property

@@ -75,21 +75,6 @@ class Agent:
         if self.output_callback:
             self.output_callback(msg_type, text)
 
-    def _add_reasoning_to_messages(self, messages: List[Dict[str, Any]], reasoning: str) -> None:
-        """
-        Add reasoning_content to the LAST assistant message if present.
-        IMPORTANT: For turns with tool calls, reasoning_content MUST be passed back.
-        For turns without tool calls, reasoning_content should NOT be included (will cause 400).
-        """
-        if not reasoning:
-            return
-
-        # Find the last assistant message and add reasoning_content to it
-        for i in range(len(messages) - 1, -1, -1):
-            if messages[i].get("role") == "assistant":
-                messages[i]["reasoning_content"] = reasoning
-                break
-
     def run(self, user_input: str) -> str:
         """
         Run the agent with a user input.
