@@ -111,7 +111,7 @@ All tools are external .exe programs defined in `tools.json` and loaded via `loa
 |------|-------|-------------|
 | `read_file` | ExternalTool | Read file contents with multi-format support (text/image/PDF/notebook). Supports offset/limit for text, pages for PDF. Returns metadata with line count, file size, mtime. |
 | `write_file` | ExternalTool | Write file contents (UTF-8, path safety check) |
-| `shell` | ExternalTool | Execute PowerShell commands (whitelist validation) |
+| `shell` | ExternalTool | Execute PowerShell commands (alias resolution, .ps1 file execution for complex scripts, background tasks, exit code interpretation, image detection) |
 | `grep` | ExternalTool | Regex search in files (output modes: content/files/count, context lines, type filter, head-limit/offset pagination, multiline mode) |
 | `glob` | ExternalTool | Pattern matching for files (max 50 results) |
 | `edit` | ExternalTool | Precise string replacement in files. old_string must match exactly, supports quote normalization (curly/straight quotes), supports replace_all for batch replacement. |
@@ -210,6 +210,28 @@ Output types:
         "pages": { "type": "string", "description": "PDF page range like '1-5' (PDF only)" }
       },
       "required": ["path"]
+    }
+  }
+}
+```
+
+### shell Tool Schema
+
+```json
+{
+  "function": {
+    "name": "shell",
+    "description": "Execute PowerShell commands with alias resolution. Complex scripts (containing variables like $_, $(), etc.) are automatically executed via .ps1 files.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "command": { "type": "string", "description": "PowerShell command to execute" },
+        "timeout": { "type": "number", "description": "Timeout in milliseconds (max: 600000)", "default": 30000 },
+        "description": { "type": "string", "description": "Command description (for logging)" },
+        "run_in_background": { "type": "boolean", "description": "Run in background", "default": false },
+        "dangerously_disable_sandbox": { "type": "boolean", "description": "Disable sandbox (dangerous - skips all validation)", "default": false }
+      },
+      "required": ["command"]
     }
   }
 }

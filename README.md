@@ -148,7 +148,7 @@ External tools are compiled .exe programs defined in `tools.json` and communicat
 |------|---------|-------------|
 | `read_file` | `external_tools/read_file/dist/read_file.exe` | Read file contents (text/image/PDF/notebook, offset/limit/papers support) |
 | `write_file` | `external_tools/write_file/dist/write_file.exe` | Write file contents |
-| `shell` | `external_tools/winshell/dist/winshell.exe` | Execute PowerShell commands (whitelist validation) |
+| `shell` | `external_tools/winshell/dist/winshell.exe` | Execute PowerShell commands (alias resolution, .ps1 file execution for complex scripts) |
 | `grep` | `external_tools/grep/dist/grep.exe` | Search file contents (regex, output modes, context, type filter, pagination) |
 | `glob` | `external_tools/glob/dist/glob.exe` | Find files by pattern (max 50 results) |
 | `edit` | `external_tools/edit/dist/edit.exe` | Precise string replacement (quote normalization, replace_all support) |
@@ -171,6 +171,24 @@ Example in `tools.json`:
             "pages": { "type": "string", "description": "PDF page range like '1-5'" }
           },
           "required": ["path"]
+        }
+      }
+    },
+    {
+      "function": {
+        "name": "shell",
+        "description": "Execute PowerShell commands with alias resolution. Complex scripts are automatically executed via .ps1 files.",
+        "command": "external_tools/winshell/dist/winshell.exe",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "command": { "type": "string", "description": "PowerShell command to execute" },
+            "timeout": { "type": "number", "description": "Timeout in milliseconds (max: 600000)", "default": 30000 },
+            "description": { "type": "string", "description": "Command description (for logging)" },
+            "run_in_background": { "type": "boolean", "description": "Run in background", "default": false },
+            "dangerously_disable_sandbox": { "type": "boolean", "description": "Disable sandbox (dangerous)", "default": false }
+          },
+          "required": ["command"]
         }
       }
     }

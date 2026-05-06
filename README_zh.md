@@ -148,7 +148,7 @@ AGImyCLI/
 |------|------|------|
 | `read_file` | `external_tools/read_file/dist/read_file.exe` | 读取文件内容（文本/图片/PDF/Notebook，支持 offset/limit/pages） |
 | `write_file` | `external_tools/write_file/dist/write_file.exe` | 写入文件内容 |
-| `shell` | `external_tools/winshell/dist/winshell.exe` | 执行 PowerShell 命令（白名单验证） |
+| `shell` | `external_tools/winshell/dist/winshell.exe` | 执行 PowerShell 命令（别名解析，复杂脚本自动使用 .ps1 文件） |
 | `grep` | `external_tools/grep/dist/grep.exe` | 搜索文件内容（正则，输出模式，上下文，类型过滤，分页） |
 | `glob` | `external_tools/glob/dist/glob.exe` | 按模式查找文件（最多 50 条） |
 | `edit` | `external_tools/edit/dist/edit.exe` | 精确字符串替换（引号规范化，replace_all 支持） |
@@ -171,6 +171,24 @@ AGImyCLI/
             "pages": { "type": "string", "description": "PDF页码范围，如 '1-5'" }
           },
           "required": ["path"]
+        }
+      }
+    },
+    {
+      "function": {
+        "name": "shell",
+        "description": "执行 PowerShell 命令（别名解析）。复杂脚本自动使用 .ps1 文件执行。",
+        "command": "external_tools/winshell/dist/winshell.exe",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "command": { "type": "string", "description": "要执行的 PowerShell 命令" },
+            "timeout": { "type": "number", "description": "超时时间（毫秒），最大 600000", "default": 30000 },
+            "description": { "type": "string", "description": "命令描述（用于日志）" },
+            "run_in_background": { "type": "boolean", "description": "后台运行", "default": false },
+            "dangerously_disable_sandbox": { "type": "boolean", "description": "禁用沙箱（危险）", "default": false }
+          },
+          "required": ["command"]
         }
       }
     }

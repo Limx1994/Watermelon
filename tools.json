@@ -62,13 +62,34 @@
       "type": "function",
       "function": {
         "name": "shell",
-        "description": "执行 PowerShell 命令（白名单验证）。",
+        "description": "执行 PowerShell 命令（别名解析）。支持复杂脚本自动使用 .ps1 文件执行。",
         "parameters": {
           "type": "object",
           "properties": {
             "command": {
               "type": "string",
               "description": "要执行的 PowerShell 命令"
+            },
+            "timeout": {
+              "type": "number",
+              "description": "超时时间（毫秒），默认 30000，最大 600000",
+              "minimum": 1000,
+              "maximum": 600000,
+              "default": 30000
+            },
+            "description": {
+              "type": "string",
+              "description": "命令描述（用于日志）"
+            },
+            "run_in_background": {
+              "type": "boolean",
+              "description": "后台运行",
+              "default": false
+            },
+            "dangerously_disable_sandbox": {
+              "type": "boolean",
+              "description": "禁用沙箱（危险 - 跳过所有验证）",
+              "default": false
             }
           },
           "required": [

@@ -111,7 +111,7 @@ AGImyCLI/
 |------|------|------|
 | `read_file` | ExternalTool | 读取文件内容，支持多种格式（文本/图片/PDF/Notebook）。文本支持 offset/limit，PDF 支持 pages 参数。返回 metadata 含行数、文件大小、mtime。 |
 | `write_file` | ExternalTool | 写入文件内容（UTF-8，路径安全检查） |
-| `shell` | ExternalTool | 执行 PowerShell 命令（白名单验证） |
+| `shell` | ExternalTool | 执行 PowerShell 命令（别名解析、.ps1 文件执行、后台任务、退出码解释、图片检测） |
 | `grep` | ExternalTool | 正则搜索文件内容（输出模式：content/files/count，上下文行，类型过滤，head-limit/offset 分页，多行模式） |
 | `glob` | ExternalTool | 文件模式匹配（最多 50 条结果） |
 | `edit` | ExternalTool | 精确替换文件中的字符串。old_string 必须与文件内容完全一致，支持引号规范化（弯引号/直引号），支持 replace_all 批量替换。 |
@@ -210,6 +210,28 @@ class ExternalTool:
         "pages": { "type": "string", "description": "PDF页码范围，如 '1-5'（仅对PDF有效）" }
       },
       "required": ["path"]
+    }
+  }
+}
+```
+
+### shell 工具 Schema
+
+```json
+{
+  "function": {
+    "name": "shell",
+    "description": "执行 PowerShell 命令（别名解析）。复杂脚本（包含 $_、$() 等变量引用）自动使用 .ps1 文件执行。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "command": { "type": "string", "description": "要执行的 PowerShell 命令" },
+        "timeout": { "type": "number", "description": "超时时间（毫秒），最大 600000", "default": 30000 },
+        "description": { "type": "string", "description": "命令描述（用于日志）" },
+        "run_in_background": { "type": "boolean", "description": "后台运行", "default": false },
+        "dangerously_disable_sandbox": { "type": "boolean", "description": "禁用沙箱（危险 - 跳过所有验证）", "default": false }
+      },
+      "required": ["command"]
     }
   }
 }
