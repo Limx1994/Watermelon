@@ -374,7 +374,7 @@ class CompactEngine:
             preserved = self._memory._history[-preserve_count:] if self._memory._history else []
 
         # 生成摘要
-        summary = self._generate_summary(self._memory._history, boundary_idx)
+        summary = self._generate_summary(self._memory._history, boundary_idx, llm_client)
 
         # 重建 history
         if boundary_idx is not None:
@@ -429,7 +429,7 @@ class CompactEngine:
         )
 
         # 创建新的 boundary（带完整摘要）
-        summary = self._generate_summary(self._memory._history, None)
+        summary = self._generate_summary(self._memory._history, None, llm_client)
         boundary = create_compact_boundary(original_count, int(original_tokens), summary)
 
         # 清空并重建
@@ -447,7 +447,7 @@ class CompactEngine:
             "messages_removed": original_count - 2  # boundary + summary
         }
 
-    def _generate_summary(self, messages: List[Dict[str, Any]], boundary_idx: Optional[int]) -> str:
+    def _generate_summary(self, messages: List[Dict[str, Any]], boundary_idx: Optional[int], llm_client) -> str:
         """使用 LLM 生成对话摘要"""
         from .llm.client import create_system_message, create_user_message
 
@@ -465,31 +465,30 @@ class CompactEngine:
             if content:
                 msg_texts.append(f"{role}: {content[:500]}")
 
-        prompt = f"""请为以下对话历史生成简洁摘要（500 tokens以内）：
+        messages_content = f"{'='*60}\n{chr(10).join(msg_texts[-20:])}\n{'='*60}"
 
-{'='*60}
-{chr(10).join(msg_texts[-20:])}
-{'='*60}
+        # 从配置文件读取提示词模板
+        try:
+            prompt_template = config.get_compact_prompt()
+            # 使用更健壮的替换逻辑
+            if "(对话历史将自动插入)" in prompt_template:
+                prompt = prompt_template.replace("(对话历史将自动插入)", messages_content)
+            else:
+                # 如果用户修改了模板，使用默认格式
+                prompt = f"""请为以下对话历史生成简洁摘要（500 tokens以内）：
+
+{messages_content}
 
 摘要要求：
 - 提炼核心主题和任务
 - 保留重要决策和结论
 - 标注涉及的文件和工具
 """
-
-        # 从配置文件读取提示词
-        try:
-            prompt_template = config.get_compact_prompt()
-            messages_content = f"{'='*60}\n{chr(10).join(msg_texts[-20:])}\n{'='*60}"
-            requirements = "摘要要求：\n- 提炼核心主题和任务\n- 保留重要决策和结论\n- 标注涉及的文件和工具"
-            prompt = prompt_template.replace("(对话历史将自动插入)", messages_content).replace("摘要要求：\n- 提炼核心主题和任务\n- 保留重要决策和结论\n- 标注涉及的文件和工具", requirements)
         except Exception as e:
             logger.warning(f"Failed to load compact prompt from {config.compact_prompt_path}: {e}. Using default prompt.")
             prompt = f"""请为以下对话历史生成简洁摘要（500 tokens以内）：
 
-{'='*60}
-{chr(10).join(msg_texts[-20:])}
-{'='*60}
+{messages_content}
 
 摘要要求：
 - 提炼核心主题和任务
@@ -503,8 +502,14 @@ class CompactEngine:
                 create_user_message(prompt)
             ]
 
-            response, _ = self._llm_fallback_summary(summary_messages)
-            return response[:2000]  # 限制长度
+            # 使用真正的 LLM 生成摘要
+            if llm_client is not None:
+                response, _, _ = llm_client.chat(summary_messages, stream=False)
+                return response[:2000] if response else "[摘要生成失败: 无响应]"
+            else:
+                # fallback 到简单摘要
+                response, _ = self._llm_fallback_summary(summary_messages)
+                return response[:2000]
         except Exception as e:
             logger.error(f"Summary generation failed: {e}")
             return f"[摘要生成失败: {str(e)[:100]}]"

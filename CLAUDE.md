@@ -346,15 +346,26 @@ Tools loading:
 
 ## Memory System (src/memory.py)
 
+### Memory Class
 Singleton for conversation management:
 - `add_message(role, content, tool_calls)` - Add message
 - `add_tool_result(tool_call_id, tool_name, result)` - Add tool result
 - `get_messages()` - Get current session messages
+- `get_context(max_messages)` - Get recent messages from current session
 - `get_conversation_for_llm(max_messages)` - Get LLM-formatted messages
 - `clear()` - Clear current session
 - `save_current_session()` - Save to history
 - `load_session(session_path)` - Load historical session
 - `list_sessions()` - List all sessions
+
+### CompactEngine Class
+Three-layer context compression engine:
+- **Level 1 (Micro)**: Clears old tool results when `tool_call_streak >= 3` or time gap >= 5min
+- **Level 2 (Auto)**: LLM generates summary when usage ratio >= 85%
+- **Level 3 (Full)**: Saves session and resets when usage ratio >= 95%
+
+Compression is configurable via `config.json` `compact` section.
+Customize compression prompts by editing `compact_prompt.md`.
 
 ## Key Design Decisions
 
@@ -437,6 +448,7 @@ Calculation rules:
 
 - Chinese IME support enabled
 - Memory auto-summary when conversation exceeds `memory_threshold`
+- **Customizable compression**: Edit `compact_prompt.md` to customize summary generation prompts
 - MCP servers: Tavily search + any stdio/HTTP MCP server
 - External tools compiled with PyInstaller
 - Custom `_OutputWindow(Window)` subclass handles mouse event gating during streaming and synchronized cursor+vertical_scroll scrolling

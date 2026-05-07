@@ -346,15 +346,26 @@ O(1) 工具名到客户端的查找：
 
 ## 记忆系统 (src/memory.py)
 
+### Memory 类
 对话管理的单例：
 - `add_message(role, content, tool_calls)` - 添加消息
 - `add_tool_result(tool_call_id, tool_name, result)` - 添加工具结果
 - `get_messages()` - 获取当前会话消息
+- `get_context(max_messages)` - 获取最近的 N 条消息
 - `get_conversation_for_llm(max_messages)` - 获取 LLM 格式的消息
 - `clear()` - 清空当前会话
 - `save_current_session()` - 保存到历史
 - `load_session(session_path)` - 加载历史会话
 - `list_sessions()` - 列出所有会话
+
+### CompactEngine 类
+三层上下文压缩引擎：
+- **Level 1 (Micro)**：当连续工具调用 >= 3 或时间间隔 >= 5分钟时，清除旧工具结果
+- **Level 2 (Auto)**：当使用率 >= 85% 时，LLM 生成摘要
+- **Level 3 (Full)**：当使用率 >= 95% 时，保存会话并重置
+
+压缩行为可通过 `config.json` 的 `compact` 配置段调整。
+通过编辑 `compact_prompt.md` 自定义压缩摘要提示词。
 
 ## 关键设计决策
 
@@ -437,6 +448,7 @@ Token 计算规则：
 
 - 已启用中文 IME 支持
 - 对话超过 `memory_threshold` 时自动摘要
+- **可自定义压缩**：编辑 `compact_prompt.md` 自定义摘要生成提示词
 - MCP 服务器：Tavily 搜索 + 任何 stdio/HTTP MCP 服务器
 - 外部工具使用 PyInstaller 编译
 - 自定义 `_OutputWindow(Window)` 子类处理 Agent 运行期间的鼠标事件屏蔽和同步光标+vertical_scroll 滚动
