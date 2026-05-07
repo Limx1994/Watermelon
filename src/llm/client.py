@@ -12,11 +12,6 @@ from ..config import config
 logger = logging.getLogger(__name__)
 
 
-# ANSI color codes for dim/thinking text
-DIM_GRAY = "\033[90m"
-RESET = "\033[0m"
-
-
 def load_tools_from_json() -> List[Dict[str, Any]]:
     """Load tools definition from tools.json file"""
     tools_path = Path(__file__).parent.parent.parent / "tools.json"
@@ -50,8 +45,9 @@ class LLMClient:
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
         stream: bool = True,
-        callback: Optional[Callable[[str, bool], None]] = None
-    ) -> Tuple[str, str]:
+        callback: Optional[Callable[[str, bool], None]] = None,
+        usage_callback: Optional[Callable[[Dict[str, int]], None]] = None
+    ) -> Tuple[str, str, Optional[Dict[str, int]]]:
         """
         Send a chat request to the LLM.
 
@@ -60,9 +56,11 @@ class LLMClient:
             tools: Optional list of tool definitions
             stream: Whether to use streaming
             callback: Optional callback for streaming responses
+            usage_callback: Optional callback for receiving usage info (prompt_tokens, completion_tokens, total_tokens)
 
         Returns:
-            Tuple of (response_content, reasoning_content)
+            Tuple of (response_content, reasoning_content, usage_dict)
+            usage_dict is only available in non-streaming mode
         """
         params: Dict[str, Any] = {
             "model": self.model,
@@ -82,9 +80,12 @@ class LLMClient:
             reasoning_content = ""
             reasoning_buffer = ""
             in_thinking = True  # Start with thinking mode
+            usage_info = None
 
             stream_iter = self.client.chat.completions.create(**params)
             for chunk in stream_iter:
+                if not chunk.choices:
+                    continue
                 delta = chunk.choices[0].delta if chunk.choices else None
                 if not delta:
                     continue
@@ -108,19 +109,40 @@ class LLMClient:
                     response_content += delta.content
                     callback(delta.content, is_reasoning=False)
 
+                # 收集 usage 信息（如果有）
+                if hasattr(chunk, 'usage') and chunk.usage and usage_info is None:
+                    usage_info = {
+                        "prompt_tokens": chunk.usage.prompt_tokens or 0,
+                        "completion_tokens": chunk.usage.completion_tokens or 0,
+                        "total_tokens": chunk.usage.total_tokens or 0
+                    }
+
             # Flush any remaining reasoning content
             if reasoning_buffer:
                 callback(reasoning_buffer, is_reasoning=True)
 
+            # 发送 usage 信息
+            if usage_info and usage_callback:
+                usage_callback(usage_info)
+
             logger.debug(f"Chat completed: {len(response_content)} chars response, {len(reasoning_content)} chars reasoning")
-            return response_content, reasoning_content
+            return response_content, reasoning_content, usage_info
         else:
             logger.debug(f"Non-streaming chat request with {len(messages)} messages")
             response = self.client.chat.completions.create(**params)
+            if not response.choices:
+                raise ValueError("Empty choices in LLM non-streaming response")
             msg = response.choices[0].message
             reasoning = getattr(msg, 'reasoning_content', '') or ''
+            usage = None
+            if hasattr(response, 'usage') and response.usage:
+                usage = {
+                    "prompt_tokens": response.usage.prompt_tokens or 0,
+                    "completion_tokens": response.usage.completion_tokens or 0,
+                    "total_tokens": response.usage.total_tokens or 0
+                }
             logger.debug(f"Non-streaming chat completed: {len(msg.content or '')} chars")
-            return msg.content or "", reasoning
+            return msg.content or "", reasoning, usage
 
     def get_tool_calls(
         self,

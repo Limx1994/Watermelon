@@ -1,4 +1,6 @@
-openai>=1.0.0
-prompt-toolkit>=3.0.0
-pyperclip>=1.0.0
-requests>=2.28.0
+openai==1.109.1
+prompt-toolkit==3.0.52
+pyperclip==1.11.0
+requests==2.33.1
+tavily-python>=1.0.0
+tiktoken>=0.7.0

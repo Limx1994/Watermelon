@@ -107,11 +107,92 @@ class Config:
 
     @property
     def context_window(self) -> int:
-        value = self._config.get("openai", {}).get("context_window", 1000)
-        # If value < 1000, treat it as "K" (e.g., 200 means 200K = 200000)
-        if value < 1000:
-            value = value * 1000
-        return value
+        """context_window: 值 >= 1000 直接作为 token 数，值 < 1000 作为"K"单位（如 64 表示 64K = 64000）"""
+        value = self._config.get("openai", {}).get("context_window", 64)
+        if value >= 1000:
+            return value
+        return value * 1000
+
+    @property
+    def max_output_tokens(self) -> int:
+        """最大输出 token 数，用于计算有效上下文窗口"""
+        return self._config.get("openai", {}).get("max_output_tokens", 20000)
+
+    @property
+    def effective_context_window(self) -> int:
+        """有效上下文 = context_window - max_output_tokens（确保输出有空间）"""
+        return max(self.context_window - self.max_output_tokens, 16000)
+
+    # Compact Configuration
+    @property
+    def compact_enabled(self) -> bool:
+        return self._config.get("compact", {}).get("enabled", True)
+
+    @property
+    def compact_buffer_tokens(self) -> int:
+        """压缩后保留的 buffer token 数"""
+        return self._config.get("compact", {}).get("buffer_tokens", 13000)
+
+    @property
+    def compact_threshold(self) -> int:
+        """触发压缩的 token 数阈值"""
+        return self.effective_context_window - self.compact_buffer_tokens
+
+    @property
+    def compact_micro_streak(self) -> int:
+        """Micro Compact 连续工具调用阈值"""
+        return self._config.get("compact", {}).get("micro_compact_streak", 3)
+
+    @property
+    def compact_micro_gap_minutes(self) -> int:
+        """Micro Compact 时间间隔（分钟）"""
+        return self._config.get("compact", {}).get("micro_compact_gap_minutes", 5)
+
+    @property
+    def compact_auto_threshold(self) -> float:
+        """Auto Compact 使用率阈值（0.0-1.0）"""
+        return self._config.get("compact", {}).get("auto_compact_threshold", 0.85)
+
+    @property
+    def compact_full_threshold(self) -> float:
+        """Full Compact 使用率阈值（0.0-1.0）"""
+        return self._config.get("compact", {}).get("full_compact_threshold", 0.95)
+
+    @property
+    def compact_preserve_messages(self) -> int:
+        """压缩后保留的最近消息数"""
+        return self._config.get("compact", {}).get("preserve_recent_messages", 10)
+
+    @property
+    def compact_prompt_path(self) -> str:
+        """压缩提示词文件路径"""
+        return self._config.get("compact", {}).get("prompt_path", "./compact_prompt.md")
+
+    def get_compact_prompt(self) -> str:
+        """读取压缩提示词模板，支持缓存"""
+        if not hasattr(self, "_compact_prompt_cache"):
+            self._compact_prompt_cache: Optional[str] = None
+        if self._compact_prompt_cache is None:
+            try:
+                path = resolve_path(self.compact_prompt_path.lstrip("./"))
+                self._compact_prompt_cache = path.read_text(encoding="utf-8")
+            except Exception:
+                self._compact_prompt_cache = self._default_compact_prompt()
+        return self._compact_prompt_cache
+
+    def _default_compact_prompt(self) -> str:
+        """默认压缩提示词（备用）"""
+        return """请为以下对话历史生成简洁摘要（500 tokens以内）：
+
+{messages}
+
+{requirements}
+
+摘要要求：
+- 提炼核心主题和任务
+- 保留重要决策和结论
+- 标注涉及的文件和工具
+"""
 
     # Agent Configuration
     @property

@@ -1,4 +1,4 @@
-# WatermelonCLI
+# AGImyCLI
 
 A TUI (Text User Interface) AGI interaction tool inspired by Claude Code, built with Python.
 
@@ -20,6 +20,15 @@ A TUI (Text User Interface) AGI interaction tool inspired by Claude Code, built 
 ```bash
 pip install -r requirements.txt
 ```
+
+## Dependencies
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| [prompt-toolkit](https://github.com/prompt-toolkit/prompt-toolkit) | 3.0.52 | TUI framework (BufferControl, FormattedTextControl) |
+| [openai](https://github.com/openai/openai-python) | 1.109.1 | OpenAI-compatible LLM client (DeepSeek API) |
+| [pyperclip](https://github.com/asweigart/pyperclip) | 1.11.0 | Windows clipboard integration |
+| [requests](https://github.com/psf/requests) | 2.33.1 | HTTP client for MCP/HTTP clients |
 
 2. Configure API credentials in `config.json`:
 ```json
@@ -73,7 +82,8 @@ AGImyCLI/
 │   ├── write_file/          # File writing tool
 │   ├── winshell/            # Shell executor with whitelist validation
 │   ├── grep/                # Content search tool
-│   └── glob/                 # File pattern matching tool
+│   ├── glob/                 # File pattern matching tool
+│   └── edit/                 # String replacement tool
 ├── manual/                  # Reference manuals
 │   ├── prompt_toolkit_MANUAL.md   # prompt_toolkit 3.0.52 API
 │   └── python-3.14-docs-text/     # Python 3.14 documentation
@@ -85,11 +95,13 @@ AGImyCLI/
 ├── mcp.json                 # MCP server configuration
 ├── tools.json                # Tool definitions (JSON format)
 ├── systsc.md                # System prompt
+├── compact_prompt.md        # Compact prompt template
 ├── requirements.txt         # Python dependencies
 ├── CLAUDE.md                # Project instructions (EN)
 ├── CLAUDE_zh.md            # Project instructions (ZH)
 ├── README.md                # This file
-└── README_zh.md            # Readme (Chinese)
+├── README_zh.md            # Readme (Chinese)
+└── compact_prompt.md       # Compact prompt template
 ```
 
 ## Configuration
@@ -104,7 +116,8 @@ AGImyCLI/
 | | `temperature` | Sampling temperature | `0.7` |
 | | `top_p` | Nucleus sampling | `0.7` |
 | | `reasoning_effort` | Reasoning depth | `max` |
-| | `context_window` | Max context window | `1000` |
+| | `context_window` | Max context window (in thousands, e.g. 128 = 128K) | `128` |
+| | `max_output_tokens` | Max output tokens | `20000` |
 | `agent` | `max_turns` | Max conversation turns | `10` |
 | | `max_retries` | Max retry count on failure | `3` |
 | | `memory_threshold` | Turns before auto-summary | `20` |
@@ -112,11 +125,24 @@ AGImyCLI/
 | `display` | `show_thinking` | Show thinking process | `true` |
 | | `thinking_indicator` | Thinking indicator text | `思考中` |
 | `system_prompt` | `path` | Path to system prompt file | `./systsc.md` |
-| `tools` | `enabled` | List of enabled built-in tools | `["shell", "read_file", "write_file", "grep", "glob"]` |
+| `tools` | `enabled` | List of enabled built-in tools | `["shell", "read_file", "write_file", "grep", "glob", "edit"]` |
 | `memory` | `path` | Conversation storage path | `./memory/conversation.json` |
 | | `auto_summary` | Auto-summarize long history | `true` |
 | `logs` | `path` | Log file path | `./logs/agent.log` |
 | | `level` | Log level | `INFO` |
+
+### compact — Context Compression Settings
+
+| Section | Key | Description | Default |
+|---------|-----|-------------|---------|
+| `compact` | `enabled` | Enable context compression | `true` |
+| | `prompt_path` | Path to compact prompt template | `./compact_prompt.md` |
+| | `buffer_tokens` | Target buffer size after compression | `13000` |
+| | `micro_compact_streak` | Streak threshold for micro compression | `3` |
+| | `micro_compact_gap_minutes` | Gap minutes for micro compression | `5` |
+| | `auto_compact_threshold` | Auto compact trigger ratio | `0.85` |
+| | `full_compact_threshold` | Full compact trigger ratio | `0.95` |
+| | `preserve_recent_messages` | Recent messages to preserve | `10` |
 
 ### mcp.json — MCP Server Configuration
 

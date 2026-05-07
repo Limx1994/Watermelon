@@ -17,8 +17,8 @@ from .tools.registry import registry
 from .tools.loader import load_external_tools
 from .mcp.server import MCPServer
 from .mcp.manager import MCPManager
-from .memory import memory
-from .utils.token_counter import count_tokens
+from .memory import memory, CompactEngine
+from .utils.token_counter import count_tokens, count_messages_tokens
 
 
 class AgentCancelledError(Exception):
@@ -44,6 +44,10 @@ class Agent:
         # Track reasoning_content for multi-turn in thinking mode
         self._last_reasoning: str = ""
         self.total_tokens: float = 0  # 累计token消耗
+        # 上下文压缩引擎
+        self._compact_engine = CompactEngine(memory)
+        # API 返回的 usage 信息
+        self._last_usage: Optional[Dict[str, int]] = None
 
     def _setup_tools(self) -> None:
         """Register built-in tools"""
@@ -54,6 +58,9 @@ class Agent:
         """Get all available tool definitions (built-in + MCP)"""
         definitions = self.mcp_server.get_tool_definitions()
         definitions.extend(self.mcp_manager.get_all_tool_definitions())
+        # 过滤掉未启用的工具
+        enabled = set(config.enabled_tools)
+        definitions = [d for d in definitions if d.get("function", {}).get("name") in enabled]
         return definitions
 
     def _execute_tool_call(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
@@ -75,6 +82,13 @@ class Agent:
         if self.output_callback:
             self.output_callback(msg_type, text)
 
+    def _calculate_context_tokens(self, messages: List[Dict[str, Any]]) -> int:
+        """计算当前 context 的 token 数（system + messages）"""
+        system_tokens = count_tokens(config.get_system_prompt())
+        memory_messages = [m for m in messages if m.get("role") != "system"]
+        memory_tokens = sum(count_tokens(m.get("content", "")) for m in memory_messages)
+        return int(system_tokens + memory_tokens)
+
     def run(self, user_input: str) -> str:
         """
         Run the agent with a user input.
@@ -91,12 +105,64 @@ class Agent:
 
         # Add user message to memory
         memory.add_message("user", user_input)
+        # 记录用户消息，用于压缩触发检测
+        self._compact_engine.record_user_message()
 
         # Get all available tools from tools.json + MCP
         tools = list(self.llm.tools)  # Start with tools from tools.json
 
         # Add MCP tools via manager
         tools.extend(self.mcp_manager.get_all_tool_definitions())
+
+        # 计算当前 context token 数
+        current_tokens = self._calculate_context_tokens(messages)
+
+        # 检查是否需要压缩
+        should_compact, level = self._compact_engine.should_compact(
+            current_tokens,
+            config.effective_context_window
+        )
+
+        if should_compact:
+            result = self._compact_engine.compact(level, self.llm)
+            if result["compacted"]:
+                self._stream_output(
+                    f"\n[上下文压缩: L{level} • 节省 ~{result['tokens_saved']} tokens • 移除 {result['messages_removed']} 条消息]\n",
+                    "compact"
+                )
+                # 重新计算 token 并重建消息
+                messages = [create_system_message(config.get_system_prompt())]
+                messages.extend(memory.get_conversation_for_llm())
+                # 不再重复添加 user_input，因为 get_conversation_for_llm() 已包含
+                current_tokens = self._calculate_context_tokens(messages)
+
+                # 再次检查是否还需要继续压缩（防止压缩循环）
+                should_compact_again, next_level = self._compact_engine.should_compact(
+                    current_tokens,
+                    config.effective_context_window
+                )
+                while should_compact_again and next_level <= level:
+                    # 升级压缩级别
+                    next_level = min(next_level + 1, CompactEngine.LEVEL_FULL)
+                    result = self._compact_engine.compact(next_level, self.llm)
+                    if result["compacted"]:
+                        self._stream_output(
+                            f"\n[追加压缩: L{next_level} • 节省 ~{result['tokens_saved']} tokens]\n",
+                            "compact"
+                        )
+                        # 重建消息
+                        messages = [create_system_message(config.get_system_prompt())]
+                        messages.extend(memory.get_conversation_for_llm())
+                        # 不再重复添加 user_input，因为 get_conversation_for_llm() 已包含
+                        current_tokens = self._calculate_context_tokens(messages)
+                    should_compact_again, next_level = self._compact_engine.should_compact(
+                        current_tokens,
+                        config.effective_context_window
+                    )
+
+        # 发送 context 使用率到 TUI
+        usage_ratio = current_tokens / config.effective_context_window if config.effective_context_window > 0 else 0
+        self._stream_output(f"context_usage:{usage_ratio:.2f}", "context_usage")
 
         # Turn counter to prevent infinite loops
         turns = 0
@@ -166,6 +232,8 @@ class Agent:
                 # Execute tool
                 self._stream_output(f"\n[Calling tool: {tool_name}]\n")
                 result = self._execute_tool_call(tool_name, arguments)
+                # 增加工具调用连续计数
+                self._compact_engine.increment_streak()
 
                 # Add tool result message
                 messages.append(create_tool_result_message(tc["id"], result.get("content", "")))
@@ -198,11 +266,15 @@ class Agent:
                     thinking_started[0] = True
                 self._stream_output(text, "answer")
 
-        final_response, final_reasoning = self.llm.chat(
+        def usage_callback(usage: Dict[str, int]):
+            self._last_usage = usage
+
+        final_response, final_reasoning, usage = self.llm.chat(
             messages,
             tools=tools,
             stream=True,
-            callback=wrap_callback
+            callback=wrap_callback,
+            usage_callback=usage_callback
         )
 
         # Add assistant response to memory

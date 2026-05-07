@@ -129,7 +129,7 @@ class StdioMCPClient(BaseMCPClient):
             return {
                 "success": not is_error,
                 "content": content,
-                "error": content if is_error else None
+                "error": result.get("error") if is_error else None
             }
         except Exception as e:
             return {

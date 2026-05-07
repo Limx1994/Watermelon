@@ -54,6 +54,7 @@ AGImyCLI/
 ├── mcp.json                 # MCP 服务器配置
 ├── tools.json                # 工具定义
 ├── systsc.md                # 系统提示词
+├── compact_prompt.md        # 压缩提示词模板
 └── requirements.txt         # 依赖
 ```
 
@@ -69,7 +70,8 @@ AGImyCLI/
 | | `temperature` | 采样温度 | `0.7` |
 | | `top_p` | 核采样参数 | `0.7` |
 | | `reasoning_effort` | 思考深度 | `max` |
-| | `context_window` | 最大上下文窗口 | `1000` |
+| | `context_window` | 最大上下文窗口（单位为千，如 128 = 128K） | `128` |
+| | `max_output_tokens` | 最大输出 Token 数 | `20000` |
 | `agent` | `max_turns` | 最大对话轮次 | `10` |
 | | `max_retries` | 失败最大重试次数 | `3` |
 | | `memory_threshold` | 触发自动摘要的轮次 | `20` |
@@ -82,6 +84,19 @@ AGImyCLI/
 | | `auto_summary` | 长历史自动摘要 | `true` |
 | `logs` | `path` | 日志文件路径 | `./logs/agent.log` |
 | | `level` | 日志级别 | `INFO` |
+
+### compact — 上下文压缩设置
+
+| 配置项 | 键 | 说明 | 默认值 |
+|--------|-----|------|--------|
+| `compact` | `enabled` | 启用上下文压缩 | `true` |
+| | `prompt_path` | 压缩提示词模板路径 | `./compact_prompt.md` |
+| | `buffer_tokens` | 压缩后目标缓冲区大小 | `13000` |
+| | `micro_compact_streak` | 微型压缩触发连续数 | `3` |
+| | `micro_compact_gap_minutes` | 微型压缩时间间隔（分钟） | `5` |
+| | `auto_compact_threshold` | 自动压缩触发比例 | `0.85` |
+| | `full_compact_threshold` | 完整压缩触发比例 | `0.95` |
+| | `preserve_recent_messages` | 保留的最近消息数 | `10` |
 
 ### mcp.json — MCP 服务器配置
 

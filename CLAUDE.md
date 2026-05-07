@@ -54,6 +54,7 @@ AGImyCLI/
 ├── mcp.json                 # MCP server configuration
 ├── tools.json                # Tool definitions
 ├── systsc.md                # System prompt
+├── compact_prompt.md       # Compact prompt template
 └── requirements.txt         # Dependencies
 ```
 
@@ -69,7 +70,8 @@ AGImyCLI/
 | | `temperature` | Sampling temperature | `0.7` |
 | | `top_p` | Nucleus sampling | `0.7` |
 | | `reasoning_effort` | Reasoning depth | `max` |
-| | `context_window` | Max context window | `1000` |
+| | `context_window` | Max context window (in thousands, e.g. 128 = 128K) | `128` |
+| | `max_output_tokens` | Max output tokens | `20000` |
 | `agent` | `max_turns` | Max conversation turns | `10` |
 | | `max_retries` | Max retry count on failure | `3` |
 | | `memory_threshold` | Turns before auto-summary | `20` |
@@ -82,6 +84,19 @@ AGImyCLI/
 | | `auto_summary` | Auto-summarize long history | `true` |
 | `logs` | `path` | Log file path | `./logs/agent.log` |
 | | `level` | Log level | `INFO` |
+
+### compact — Context Compression Settings
+
+| Section | Key | Description | Default |
+|---------|-----|-------------|---------|
+| `compact` | `enabled` | Enable context compression | `true` |
+| | `prompt_path` | Path to compact prompt template | `./compact_prompt.md` |
+| | `buffer_tokens` | Target buffer size after compression | `13000` |
+| | `micro_compact_streak` | Streak threshold for micro compression | `3` |
+| | `micro_compact_gap_minutes` | Gap minutes for micro compression | `5` |
+| | `auto_compact_threshold` | Auto compact trigger ratio | `0.85` |
+| | `full_compact_threshold` | Full compact trigger ratio | `0.95` |
+| | `preserve_recent_messages` | Recent messages to preserve | `10` |
 
 ### mcp.json — MCP Server Configuration
 

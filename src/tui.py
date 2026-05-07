@@ -150,6 +150,9 @@ class SimpleTUI:
         # Token display — fixed text shown at bottom-right
         self._token_text: str = ""
         self._token_control = FormattedTextControl(text=self._get_token_display, focusable=False)
+        # Context usage tracking
+        self._context_usage_ratio: float = 0.0  # 0.0 ~ 1.0
+        self._compact_indicator: str = ""  # 压缩状态指示器
 
         # Input buffer - handles user input with history
         self.input_buffer = Buffer(
@@ -204,15 +207,50 @@ class SimpleTUI:
             "token_info": "fg:green",
             "user": "fg:cyan bold",
             "error": "fg:red",
+            # Context usage colors
+            "context_usage_low": "fg:#00ff00",     # green - < 50%
+            "context_usage_medium": "fg:yellow",   # yellow - 50-84%
+            "context_usage_high": "fg:#ff8800",   # orange - 85-94%
+            "context_usage_critical": "fg:red bold",  # red - >= 95%
+            "compact_indicator": "fg:cyan italic",
         })
 
     # ── Helpers ──────────────────────────────────────────
 
     def _get_token_display(self) -> list[tuple[str, str]]:
         """Return token display as styled fragment (called by FormattedTextControl)"""
-        if not self._token_text:
-            return []
-        return [("class:token_info", f" {self._token_text} ")]
+        parts = []
+
+        # Context usage progress bar (show when >= 50%)
+        if self._context_usage_ratio >= 0.5:
+            filled = int(self._context_usage_ratio * 20)
+            bar = "█" * filled + "░" * (20 - filled)
+            ratio_pct = int(self._context_usage_ratio * 100)
+
+            # 颜色根据使用率变化
+            if ratio_pct >= 95:
+                color = "context_usage_critical"
+            elif ratio_pct >= 85:
+                color = "context_usage_high"
+            elif ratio_pct >= 50:
+                color = "context_usage_medium"
+            else:
+                color = "context_usage_low"
+
+            parts.append((f"class:{color}", f"[{bar}] {ratio_pct}%"))
+
+        # Token 信息
+        if self._token_text:
+            if parts:
+                parts.append(("class:token_info", f" {self._token_text}"))
+            else:
+                parts.append(("class:token_info", f" {self._token_text}"))
+
+        # 压缩指示器
+        if self._compact_indicator:
+            parts.append(("class:compact_indicator", f" {self._compact_indicator}"))
+
+        return parts if parts else []
 
     def _get_prompt_fragments(self) -> list[tuple[str, str]]:
         """Return prompt text, changing indicator when agent is running."""
@@ -229,7 +267,7 @@ class SimpleTUI:
         lines = full_text.split('\n')
         if line <= 0:
             return 0
-        if line >= len(lines):
+        if line > len(lines):
             return len(full_text)
         return sum(len(l) + 1 for l in lines[:line])
 
@@ -607,6 +645,14 @@ class SimpleTUI:
                         self._fragments.append(("class:user", f"\n> {text}\n"))
                 elif msg_type == "token_info":
                     self._token_text = text
+                elif msg_type == "context_usage":
+                    # 格式: "context_usage:0.52"
+                    try:
+                        self._context_usage_ratio = float(text.split(":")[1])
+                    except (ValueError, IndexError):
+                        pass
+                elif msg_type == "compact":
+                    self._compact_indicator = text
                 else:
                     with self._fragments_lock:
                         self._fragments.append(("", text))
