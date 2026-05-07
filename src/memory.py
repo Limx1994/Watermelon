@@ -313,7 +313,7 @@ class CompactEngine:
         from .utils.token_counter import count_tokens
 
         cleared = 0
-        original_size = 0  # 初始化以避免循环为空时未定义
+        cleared_tokens = 0
         tool_results = [
             (i, m) for i, m in enumerate(self._memory._history)
             if m.get("role") == "tool" and not m.get("_cleared")
@@ -327,8 +327,8 @@ class CompactEngine:
         else:
             to_clear = tool_results[:] if tool_results else []
         for i, msg in to_clear:
-            original_size += count_tokens(msg.get("content", ""))
-            msg["content"] = f"[工具结果已清理 • 约 {int(original_size)} tokens]"
+            cleared_tokens += count_tokens(msg.get("content", ""))
+            msg["content"] = f"[工具结果已清理 • 约 {int(cleared_tokens)} tokens]"
             msg["_cleared"] = True
             cleared += 1
 
@@ -336,7 +336,7 @@ class CompactEngine:
             logger.info(f"Micro compact: cleared {cleared} tool results")
         return {
             "compacted": cleared > 0,
-            "tokens_saved": int(original_size) if cleared > 0 else 0,
+            "tokens_saved": int(cleared_tokens),
             "messages_removed": cleared
         }
 
@@ -477,14 +477,25 @@ class CompactEngine:
 - 标注涉及的文件和工具
 """
 
-        # 从配置文件读取提示词模板（保持向后兼容）
+        # 从配置文件读取提示词
         try:
             prompt_template = config.get_compact_prompt()
             messages_content = f"{'='*60}\n{chr(10).join(msg_texts[-20:])}\n{'='*60}"
             requirements = "摘要要求：\n- 提炼核心主题和任务\n- 保留重要决策和结论\n- 标注涉及的文件和工具"
-            prompt = prompt_template.replace("{messages}", messages_content).replace("{requirements}", requirements)
+            prompt = prompt_template.replace("(对话历史将自动插入)", messages_content).replace("摘要要求：\n- 提炼核心主题和任务\n- 保留重要决策和结论\n- 标注涉及的文件和工具", requirements)
         except Exception as e:
             logger.warning(f"Failed to load compact prompt from {config.compact_prompt_path}: {e}. Using default prompt.")
+            prompt = f"""请为以下对话历史生成简洁摘要（500 tokens以内）：
+
+{'='*60}
+{chr(10).join(msg_texts[-20:])}
+{'='*60}
+
+摘要要求：
+- 提炼核心主题和任务
+- 保留重要决策和结论
+- 标注涉及的文件和工具
+"""
 
         try:
             summary_messages = [

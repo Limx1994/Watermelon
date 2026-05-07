@@ -1,3 +1,4 @@
+import json
 import re
 from typing import Any, Dict, List
 
@@ -48,10 +49,8 @@ def count_tokens(text: str) -> float:
     english = len(_ENGLISH_RE.findall(text))
     punctuation = sum(1 for c in text if c in _PUNCTUATION_SET)
     digits = len(_DIGIT_RE.findall(text))
-
-    classified_chars = set(_CHINESE_RE.findall(text)) | set(_ENGLISH_RE.findall(text))
-    classified_chars.update(c for c in text if c in _PUNCTUATION_SET or c.isdigit())
-    other = len(text) - len(classified_chars)
+    classified = chinese + english + punctuation + digits
+    other = len(text) - classified
 
     return chinese * 1.3 + english * 1.1 + (punctuation + digits + other) * 1.0
 
@@ -79,7 +78,6 @@ def count_messages_tokens(messages: List[Dict[str, Any]], system_prompt: str) ->
         # tool_calls 的 arguments 也消耗 token
         for tc in tool_calls:
             if isinstance(tc, dict):
-                import json
                 args = tc.get("arguments", "")
                 if isinstance(args, str):
                     args = json.loads(args) if args else {}

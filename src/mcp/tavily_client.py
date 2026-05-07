@@ -13,13 +13,19 @@ class TavilyMCPClient(BaseMCPClient):
         self.server_type = server_config.get("type", "tavily")
         self.api_key = server_config.get("api_key", "")
         self._connected = False
+        self._client = None
 
     def connect(self) -> bool:
         """Connect to the Tavily MCP server"""
         try:
             if self.server_type == "tavily":
+                from tavily import TavilyClient
+                self._client = TavilyClient(api_key=self.api_key)
                 self._connected = True
                 return True
+            return False
+        except ImportError:
+            self._connected = False
             return False
         except Exception:
             return False
@@ -97,9 +103,10 @@ class TavilyMCPClient(BaseMCPClient):
     def _tavily_search(self, query: str, max_results: int) -> Dict[str, Any]:
         """Perform Tavily search"""
         try:
-            from tavily import TavilyClient
-            client = TavilyClient(api_key=self.api_key)
-            results = client.search(query=query, max_results=max_results)
+            if self._client is None:
+                from tavily import TavilyClient
+                self._client = TavilyClient(api_key=self.api_key)
+            results = self._client.search(query=query, max_results=max_results)
 
             # Format results
             formatted = []
