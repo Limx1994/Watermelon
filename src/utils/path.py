@@ -1,7 +1,10 @@
 """Path utility functions for relative path handling"""
 
+import logging
 import os
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = None
 
@@ -19,8 +22,8 @@ def get_project_root() -> Path:
                 break
             current = current.parent
         if _PROJECT_ROOT is None:
-            # Fallback to current directory
             _PROJECT_ROOT = Path.cwd()
+            logger.debug(f"Project root fallback to cwd: {_PROJECT_ROOT}")
     return _PROJECT_ROOT
 
 
@@ -36,6 +39,7 @@ def resolve_path(relative_path: str) -> Path:
     try:
         resolved.relative_to(root)
     except ValueError:
+        logger.warning(f"Path traversal blocked: {relative_path}")
         raise ValueError(f"Path '{relative_path}' is outside project directory")
     return resolved
 
@@ -44,18 +48,4 @@ def ensure_directory(path: str) -> None:
     """Ensure a directory exists, create if necessary"""
     resolved = resolve_path(path)
     resolved.mkdir(parents=True, exist_ok=True)
-
-
-def safe_read_file(path: str, encoding: str = "utf-8") -> str:
-    """Safely read a file within project directory"""
-    resolved = resolve_path(path)
-    if not resolved.exists():
-        raise FileNotFoundError(f"File not found: {path}")
-    return resolved.read_text(encoding=encoding)
-
-
-def safe_write_file(path: str, content: str, encoding: str = "utf-8") -> None:
-    """Safely write a file within project directory"""
-    resolved = resolve_path(path)
-    resolved.parent.mkdir(parents=True, exist_ok=True)
-    resolved.write_text(content, encoding=encoding)
+    logger.debug(f"Directory ensured: {resolved}")

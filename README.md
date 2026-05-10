@@ -13,6 +13,12 @@ A TUI (Text User Interface) AGI interaction tool inspired by Claude Code, built 
 - **Streaming output**: Real-time token-by-token response display with styled fragments
 - **Styled display**: Thinking in gray italic, answer with cyan separator, token bar fixed at bottom (independent row, right-aligned)
 - **Token statistics**: Live token consumption displayed at bottom-right (upload/download/cumulative)
+- **Autonomous mode**: Persistent agent loop with tick-based wake-up, proactive instructions, and Sleep tool for idle waiting
+- **Model degradation recovery**: Auto-switch to fallback model on failure, auto-restore on success
+- **Standard cron scheduling**: 5-field cron expressions via croniter, with jitter to avoid simultaneous triggers
+- **Slash commands**: 13 built-in commands (/help, /model, /save, /compact, etc.) with Tab completion
+- **Context usage bar**: Progress bar at >= 50% context usage with color coding (green/yellow/orange/red)
+- **Project context injection**: Automatically injects CLAUDE.md and git status into each LLM call
 
 ## Quick Start
 
@@ -29,8 +35,11 @@ pip install -r requirements.txt
 | [openai](https://github.com/openai/openai-python) | 1.109.1 | OpenAI-compatible LLM client (DeepSeek API) |
 | [pyperclip](https://github.com/asweigart/pyperclip) | 1.11.0 | Windows clipboard integration |
 | [requests](https://github.com/psf/requests) | 2.33.1 | HTTP client for MCP/HTTP clients |
+| [tavily-python](https://github.com/tavily-ai/tavily-python) | 0.7.24 | Tavily web search MCP client |
+| [tiktoken](https://github.com/openai/tiktoken) | 0.12.0 | Token counting |
+| [croniter](https://github.com/kiorky/croniter) | 6.0.0 | Standard 5-field cron expression parsing |
 
-2. Configure API credentials in `config.json`:
+2. Configure API credentials in `config.json` (note: `config.json` and `config/` are gitignored for security):
 ```json
 {
   "openai": {
@@ -62,10 +71,19 @@ AGImyCLI/
 │   │   ├── base.py          # Tool base class and ToolResult
 │   │   ├── registry.py      # Tool registry (singleton)
 │   │   ├── loader.py        # External tool loader
-│   │   └── external.py      # External CLI tool executor
+│   │   ├── external.py      # External CLI tool executor
+│   │   └── sleep.py         # Sleep tool for autonomous idle waiting
+│   ├── commands/
+│   │   ├── __init__.py      # Package init
+│   │   ├── registry.py      # Slash command registry (CommandRegistry, SlashCommand)
+│   │   ├── core.py          # Built-in slash commands (/help, /model, /save, etc.)
+│   │   └── completer.py     # Slash command tab completion (SlashCommandCompleter)
+│   ├── cron/
+│   │   └── scheduler.py     # Cron scheduler (CronScheduler, CronTask)
 │   ├── mcp/
 │   │   ├── base.py          # Abstract MCP client base class
 │   │   ├── protocol.py      # JSON-RPC 2.0 protocol
+│   │   ├── client.py        # MCP client factory (create_mcp_client)
 │   │   ├── server.py        # MCP server (expose built-in tools)
 │   │   ├── manager.py       # MCP client manager
 │   │   ├── index.py         # Tool name to client index
@@ -80,28 +98,35 @@ AGImyCLI/
 ├── external_tools/           # External compiled .exe tools
 │   ├── read_file/           # File reading tool
 │   ├── write_file/          # File writing tool
-│   ├── winshell/            # Shell executor with whitelist validation
+│   ├── winshell/            # Shell executor with alias resolution
 │   ├── grep/                # Content search tool
 │   ├── glob/                 # File pattern matching tool
 │   └── edit/                 # String replacement tool
-├── manual/                  # Reference manuals
-│   ├── prompt_toolkit_MANUAL.md   # prompt_toolkit 3.0.52 API
-│   └── python-3.14-docs-text/     # Python 3.14 documentation
+├── prompts/                 # Prompt templates
+│   ├── systsc.md                # System prompt
+│   ├── compact_prompt.md        # Compact prompt template
+│   ├── autonomous_instructions.md  # Autonomous mode behavior
+│   ├── compact_resume.md           # Post-compaction resume
+│   ├── max_tokens_recovery.md      # Output truncation recovery
+│   ├── context_too_long.md         # Context overflow recovery
+│   ├── token_budget_nudge.md       # Token budget nudge
+│   ├── summary_system.md           # Summary generation system prompt
+│   └── summary_template.md         # Summary template
 ├── memory/                  # Conversation storage
 │   ├── conversation.json    # Current session history
 │   └── history/             # Archived sessions
 ├── logs/                    # Log files
+├── config/                  # Configuration files
+│   ├── mcp.json                 # MCP server configuration
+│   ├── tools.json               # Tool definitions
+│   └── scheduled_tasks.json     # Cron task state (auto-generated)
 ├── config.json              # Application configuration
-├── mcp.json                 # MCP server configuration
-├── tools.json                # Tool definitions (JSON format)
-├── systsc.md                # System prompt
-├── compact_prompt.md        # Compact prompt template
 ├── requirements.txt         # Python dependencies
 ├── CLAUDE.md                # Project instructions (EN)
 ├── CLAUDE_zh.md            # Project instructions (ZH)
 ├── README.md                # This file
 ├── README_zh.md            # Readme (Chinese)
-└── compact_prompt.md       # Compact prompt template
+└── LICENSE                  # License file
 ```
 
 ## Configuration
@@ -113,30 +138,45 @@ AGImyCLI/
 | `openai` | `api_key` | API key | - |
 | | `base_url` | API base URL | `https://api.deepseek.com` |
 | | `model` | Model name | `deepseek-v4-flash` |
+| | `fallback_model` | Fallback model for degradation recovery (empty = disabled). Object: `{"model": "gpt-4o", "base_url": "...", "api_key": "..."}` — all three fields required | `""` |
 | | `temperature` | Sampling temperature | `0.7` |
 | | `top_p` | Nucleus sampling | `0.7` |
 | | `reasoning_effort` | Reasoning depth | `max` |
 | | `context_window` | Max context window (in thousands, e.g. 128 = 128K) | `128` |
 | | `max_output_tokens` | Max output tokens | `20000` |
-| `agent` | `max_turns` | Max conversation turns | `10` |
+| `agent` | `max_turns` | Max conversation turns | `50` |
 | | `max_retries` | Max retry count on failure | `3` |
+| | `retry_interval_seconds` | Retry interval in seconds | `60` |
+| | `network_max_retries` | Max retry count for network errors | `10` |
+| | `network_retry_interval_seconds` | Network error retry interval in seconds | `30` |
 | | `memory_threshold` | Turns before auto-summary | `20` |
 | | `thinking_enabled` | Enable thinking mode | `true` |
+| | `nudge_threshold` | Token usage ratio to inject nudge message (0.0-1.0) | `0.90` |
 | `display` | `show_thinking` | Show thinking process | `true` |
 | | `thinking_indicator` | Thinking indicator text | `思考中` |
-| `system_prompt` | `path` | Path to system prompt file | `./systsc.md` |
-| `tools` | `enabled` | List of enabled built-in tools | `["shell", "read_file", "write_file", "grep", "glob", "edit"]` |
+| `system_prompt` | `path` | Path to system prompt file | `./prompts/systsc.md` |
+| `tools` | `enabled` | List of enabled external tools (configured in tools.json) | `["shell", "read_file", "write_file", "grep", "glob", "edit"]` |
 | `memory` | `path` | Conversation storage path | `./memory/conversation.json` |
 | | `auto_summary` | Auto-summarize long history | `true` |
 | `logs` | `path` | Log file path | `./logs/agent.log` |
 | | `level` | Log level | `INFO` |
+| | `max_bytes` | Max size per log file before rotation | `10485760` (10MB) |
+| | `backup_count` | Number of backup log files to keep | `5` |
+| `prompts` | `autonomous_instructions` | Path to autonomous mode instructions | `./prompts/autonomous_instructions.md` |
+| | `compact_resume` | Path to post-compaction resume prompt | `./prompts/compact_resume.md` |
+| | `max_tokens_recovery` | Path to output truncation recovery prompt | `./prompts/max_tokens_recovery.md` |
+| | `context_too_long` | Path to context overflow recovery prompt | `./prompts/context_too_long.md` |
+| | `token_budget_nudge` | Path to token budget nudge prompt | `./prompts/token_budget_nudge.md` |
+| | `summary_system` | Path to summary system prompt | `./prompts/summary_system.md` |
+| | `summary_template` | Path to summary template | `./prompts/summary_template.md` |
+| | `compact_prompt` | Path to compact prompt template | `./prompts/compact_prompt.md` |
 
 ### compact — Context Compression Settings
 
 | Section | Key | Description | Default |
 |---------|-----|-------------|---------|
 | `compact` | `enabled` | Enable context compression | `true` |
-| | `prompt_path` | Path to compact prompt template | `./compact_prompt.md` |
+| | `prompt_path` | Path to compact prompt template | `./prompts/compact_prompt.md` |
 | | `buffer_tokens` | Target buffer size after compression | `13000` |
 | | `micro_compact_streak` | Streak threshold for micro compression | `3` |
 | | `micro_compact_gap_minutes` | Gap minutes for micro compression | `5` |
@@ -144,7 +184,14 @@ AGImyCLI/
 | | `full_compact_threshold` | Full compact trigger ratio | `0.95` |
 | | `preserve_recent_messages` | Recent messages to preserve | `10` |
 
-### mcp.json — MCP Server Configuration
+### autonomous — Autonomous Mode Settings
+
+| Section | Key | Description | Default |
+|---------|-----|-------------|---------|
+| `autonomous` | `tick_interval_minutes` | Tick interval for proactive wake-up (minutes) | `10` |
+| | `cron_tasks` | List of cron task definitions | `[]` |
+
+### config/mcp.json — MCP Server Configuration
 
 ```json
 {
@@ -174,7 +221,7 @@ External tools are compiled .exe programs defined in `tools.json` and communicat
 |------|---------|-------------|
 | `read_file` | `external_tools/read_file/dist/read_file.exe` | Read file contents (text/image/PDF/notebook, offset/limit/papers support) |
 | `write_file` | `external_tools/write_file/dist/write_file.exe` | Write file contents |
-| `shell` | `external_tools/winshell/dist/winshell.exe` | Execute PowerShell commands (alias resolution, .ps1 file execution for complex scripts) |
+| `shell` | `external_tools/winshell/dist/winshell.exe` | Execute PowerShell commands (alias resolution, quote-aware operator conversion, .ps1 for complex scripts) |
 | `grep` | `external_tools/grep/dist/grep.exe` | Search file contents (regex, output modes, context, type filter, pagination) |
 | `glob` | `external_tools/glob/dist/glob.exe` | Find files by pattern (max 50 results) |
 | `edit` | `external_tools/edit/dist/edit.exe` | Precise string replacement (quote normalization, replace_all support) |
@@ -252,6 +299,52 @@ Token calculation rules:
 | `Ctrl+C` | Copy selected text (if text selected) / Exit (if no selection) |
 | `Ctrl+Q` | Exit |
 | `Ctrl+L` | Clear screen and memory |
+| `Tab` | Complete slash command name (when input starts with /) |
+
+## Slash Commands
+
+Type `/` followed by a command name to execute it. Press Tab for completion. Commands are available even while the agent is processing.
+
+| Command | Description |
+|---------|-------------|
+| `/help` | Show all available commands |
+| `/clear` | Clear screen and memory |
+| `/model [name]` | Show or switch current model |
+| `/config` | Show current configuration |
+| `/history` | Show conversation history |
+| `/save` | Save current session |
+| `/load [id]` | Load a saved session |
+| `/memory [count]` | Show recent memory |
+| `/compact` | Manually trigger context compression |
+| `/mcp` | Show MCP server status |
+| `/tools` | List available tools |
+| `/system` | Show system prompt |
+| `/version` | Show version info |
+
+## Autonomous Workflow
+
+After the first user interaction, the agent enters a persistent autonomous loop:
+
+```
+User sends input -> Agent processes -> Enters autonomous loop
+                                          |
+                              CronScheduler ticks every N minutes
+                                          |
+                              +--- <tick> received ------------+
+                              | First tick: greet user         |
+                              | Subsequent: autonomous work    |
+                              | No work -> Sleep tool          |
+                              +-------------------------------+
+```
+
+**Key behaviors:**
+- **Tick wake-up**: `<tick>` prompts keep the agent alive between turns
+- **Sleep state**: When Sleep tool is active, ticks are suppressed; cron tasks still fire
+- **First tick**: Outputs a greeting, asks what the user wants
+- **Subsequent ticks**: Agent looks for useful work (read files, search, test, commit)
+- **Bias toward action**: Agent acts on judgment rather than asking confirmation
+- **Model degradation**: Auto-switch to fallback model on failure, auto-restore on success
+- **Autonomous compact resume**: After compression, agent continues its work loop
 
 ## License
 

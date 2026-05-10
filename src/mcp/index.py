@@ -5,6 +5,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .base import BaseMCPClient
 
+logger = logging.getLogger(__name__)
+
 
 class ToolIndex:
     """Fast in-memory index for tool name to client lookup"""
@@ -26,25 +28,26 @@ class ToolIndex:
             # Handle both raw format and OpenAI function-calling format
             tool_name = tool.get("name") or tool.get("function", {}).get("name")
             if not tool_name:
-                logging.warning(f"Tool missing name in {server_name}, skipping")
+                logger.warning(f"Tool missing name in {server_name}, skipping")
                 continue
             self._index[tool_name] = (server_name, client, tool)
             tool_names.append(tool_name)
         self._servers[server_name] = tool_names
-        logging.debug(f"Registered {len(tool_names)} tools for {server_name}")
+        logger.debug(f"Registered {len(tool_names)} tools for {server_name}")
 
     def unregister(self, server_name: str) -> None:
         """Unregister all tools from a server"""
         tool_names = self._servers.pop(server_name, [])
         for name in tool_names:
             self._index.pop(name, None)
-        logging.debug(f"Unregistered {len(tool_names)} tools for {server_name}")
+        logger.debug(f"Unregistered {len(tool_names)} tools for {server_name}")
 
     def find(self, tool_name: str) -> Optional[Tuple[str, BaseMCPClient]]:
         """Find client for a tool by name. Returns (server_name, client) or None."""
         entry = self._index.get(tool_name)
         if entry:
             return (entry[0], entry[1])  # server_name, client
+        logger.debug(f"ToolIndex: tool '{tool_name}' not found in index ({len(self._index)} tools)")
         return None
 
     def get_tool_def(self, tool_name: str) -> Optional[Dict[str, Any]]:

@@ -11,7 +11,12 @@ import time
 from typing import Any, Dict, List, Optional
 
 from .base import BaseMCPClient
-from .protocol import MCPProtocol
+from .protocol import MCPProtocol, MCPError
+
+logger = logging.getLogger(__name__)
+
+# Stdio client constants
+JSON_PARSE_FAIL_THRESHOLD = 10
 
 
 class StdioMCPClient(BaseMCPClient):
@@ -52,7 +57,7 @@ class StdioMCPClient(BaseMCPClient):
             return True
 
         if not self.command:
-            logging.error(f"MCP stdio client '{self.name}': no command configured")
+            logger.error(f"MCP stdio client '{self.name}': no command configured")
             return False
 
         try:
@@ -61,10 +66,10 @@ class StdioMCPClient(BaseMCPClient):
             self._perform_handshake()
             self._discover_tools()
             self._connected = True
-            logging.info(f"MCP stdio client '{self.name}' connected (command: {self.command})")
+            logger.info(f"MCP stdio client '{self.name}' connected (command: {self.command})")
             return True
         except Exception as e:
-            logging.error(f"MCP stdio client '{self.name}' connection failed: {e}")
+            logger.error(f"MCP stdio client '{self.name}' connection failed: {e}")
             self._cleanup()
             return False
 
@@ -81,7 +86,7 @@ class StdioMCPClient(BaseMCPClient):
 
         if self._process and self._process.poll() is not None:
             rc = self._process.returncode
-            logging.warning(f"MCP stdio server '{self.name}' exited (rc={rc})")
+            logger.warning(f"MCP stdio server '{self.name}' exited (rc={rc})")
             self._connected = False
             self._tools = []
             self._cleanup()
@@ -115,6 +120,7 @@ class StdioMCPClient(BaseMCPClient):
                 "name": tool_name,
                 "arguments": arguments
             }, timeout=self.timeout)
+            logger.info(f"MCP stdio call_tool: {tool_name} -> success={result.get('isError', False) is False}")
 
             # Parse MCP content items (array of {type, text, ...})
             content_items = result.get("content", [])
@@ -162,7 +168,13 @@ class StdioMCPClient(BaseMCPClient):
     def _start_process(self) -> None:
         """Spawn the MCP server subprocess."""
         cmd = self._resolve_command(self.command)
+        if cmd == self.command and not shutil.which(cmd):
+            raise FileNotFoundError(
+                f"MCP server command '{self.command}' not found in PATH. "
+                f"Install it or remove '{self.name}' from mcp.json."
+            )
         cmd_parts = [cmd] + self.args
+        logger.info(f"MCP stdio spawning: {cmd_parts}")
 
         env = None
         if self.env_override:
@@ -221,14 +233,22 @@ class StdioMCPClient(BaseMCPClient):
 
                 msg = json.loads(line)
                 self._response_queue.put(msg)
+                consecutive_failures = 0
+                self._consecutive_json_failures = 0
             except json.JSONDecodeError:
-                logging.warning(f"MCP stdio '{self.name}': malformed JSON received, skipping: {line[:100]}")
+                consecutive_failures = getattr(self, '_consecutive_json_failures', 0) + 1
+                self._consecutive_json_failures = consecutive_failures
+                if consecutive_failures > JSON_PARSE_FAIL_THRESHOLD:
+                    logger.error(f"MCP stdio '{self.name}': too many consecutive JSON parse failures ({consecutive_failures}), stopping reader")
+                    break
+                logger.warning(f"MCP stdio '{self.name}': malformed JSON received ({consecutive_failures}/{JSON_PARSE_FAIL_THRESHOLD}), skipping: {line[:100]}")
                 continue
             except (BrokenPipeError, OSError, ValueError):
                 break
 
     def _cleanup(self) -> None:
         """Clean up subprocess resources."""
+        self._shutdown = True  # Signal reader thread to stop
         proc = self._process
         if proc is None:
             return
@@ -275,6 +295,8 @@ class StdioMCPClient(BaseMCPClient):
         """Discover available tools via tools/list."""
         result = self._send_request("tools/list", timeout=10)
         self._tools = result.get("tools", [])
+        tool_names = [t.get("name", "?") for t in self._tools]
+        logger.info(f"MCP stdio discovered {len(self._tools)} tools: {tool_names}")
 
     def _send_request(self, method: str, params: Any = None, timeout: Optional[int] = None) -> Any:
         """Send a JSON-RPC request and wait for the response."""
@@ -297,6 +319,14 @@ class StdioMCPClient(BaseMCPClient):
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                # Drain any stale responses for this request ID
+                while not self._response_queue.empty():
+                    try:
+                        stale = self._response_queue.get_nowait()
+                        if stale.get("id") == req_id:
+                            break
+                    except queue.Empty:
+                        break
                 raise TimeoutError(f"MCP request timed out after {timeout}s (method: {request.get('method')})")
 
             try:

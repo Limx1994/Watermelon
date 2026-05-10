@@ -11,3 +11,31 @@ build/
 venv/
 *.log
 .DS_Store
+config.json
+config/
+
+# Archives
+*.7z
+
+# Ad-hoc scripts
+_build_*.py
+_debug_*.py
+_test_*.py
+
+# Ad-hoc test scripts (root-level)
+test_shell*.py
+
+# PowerShell artifacts
+$null
+
+# Debug output
+_ps_*.txt
+
+# Test reports
+shell_test_report.json
+
+# PyInstaller spec at root
+/winshell.spec
+
+# Manual/reference docs
+/manual/

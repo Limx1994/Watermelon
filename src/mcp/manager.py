@@ -1,12 +1,15 @@
 """MCP client manager - orchestrates all MCP clients"""
 
 import logging
+import threading
 from typing import Any, Dict, List, Optional
 
 from .base import BaseMCPClient
 from .client import create_mcp_client
 from .persistence import MCPDataStore
 from .index import ToolIndex
+
+logger = logging.getLogger(__name__)
 
 
 class MCPManager:
@@ -19,6 +22,7 @@ class MCPManager:
         self._index = ToolIndex()
         self._datastore = MCPDataStore()
         self._connected = False
+        self._lock = threading.Lock()
 
     @property
     def is_connected(self) -> bool:
@@ -27,7 +31,7 @@ class MCPManager:
     def connect_all(self) -> bool:
         """Connect to all configured MCP servers"""
         if not self.config_enabled:
-            logging.info("MCP is disabled in configuration")
+            logger.info("MCP is disabled in configuration")
             return False
 
         success_count = 0
@@ -47,22 +51,24 @@ class MCPManager:
                         "connected_at": None,  # Will be set by datastore
                     })
                     success_count += 1
-                    logging.info(f"Connected to MCP server: {server_name}")
+                    logger.info(f"Connected to MCP server: {server_name}")
                 else:
-                    logging.warning(f"Failed to connect to MCP server: {server_name}")
+                    logger.warning(f"Failed to connect to MCP server: {server_name}")
                     self._datastore.save_status(server_name, {"connected": False})
                     self._datastore.append_error(server_name, {
                         "error": "connection_failed",
                         "message": f"Failed to connect to {server_name}"
                     })
             except Exception as e:
-                logging.error(f"Error connecting to {server_name}: {e}")
+                logger.error(f"Error connecting to {server_name}: {e}")
                 self._datastore.append_error(server_name, {
                     "error": "connection_exception",
                     "message": str(e)
                 })
 
         self._connected = success_count > 0
+        total = len(self.server_configs)
+        logger.info(f"MCP connect_all: {success_count}/{total} servers connected")
         return self._connected
 
     def disconnect_all(self) -> None:
@@ -70,9 +76,9 @@ class MCPManager:
         for server_name, client in self._clients.items():
             try:
                 client.disconnect()
-                logging.info(f"Disconnected from MCP server: {server_name}")
+                logger.info(f"Disconnected from MCP server: {server_name}")
             except Exception as e:
-                logging.warning(f"Error disconnecting {server_name}: {e}")
+                logger.warning(f"Error disconnecting {server_name}: {e}")
         self._clients.clear()
         self._index.clear()
         self._connected = False
@@ -104,9 +110,10 @@ class MCPManager:
 
         server_name, client = result
         try:
+            logger.debug(f"MCP call_tool: {tool_name} -> server={server_name}")
             return client.call_tool(tool_name, arguments)
         except Exception as e:
-            logging.error(f"Tool call failed for {tool_name}: {e}")
+            logger.error(f"Tool call failed for {tool_name}: {e}")
             self._datastore.append_error(server_name, {
                 "error": "tool_call_failed",
                 "tool": tool_name,
@@ -121,20 +128,4 @@ class MCPManager:
     def reload(self) -> None:
         """Reload configuration and reconnect"""
         self.disconnect_all()
-        # Re-read configs (caller should update server_configs)
-        # For now just reconnect with existing configs
         self.connect_all()
-
-    def get_status_summary(self) -> Dict[str, Any]:
-        """Get a summary of all server statuses"""
-        return {
-            "enabled": self.config_enabled,
-            "connected": self._connected,
-            "servers": {
-                name: {
-                    "connected": client.is_connected(),
-                    "tool_count": len(self._index.get_server_tools(name))
-                }
-                for name, client in self._clients.items()
-            }
-        }

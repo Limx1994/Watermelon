@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import queue
+import sys
 import threading
 from typing import Optional
 
@@ -17,15 +18,23 @@ from prompt_toolkit.layout import Layout, HSplit, VSplit, Window, ScrollOffsets
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.dimension import LayoutDimension as D
 from prompt_toolkit.layout.margins import ScrollbarMargin
+from prompt_toolkit.completion import DynamicCompleter, DummyCompleter
 from prompt_toolkit.lexers import Lexer
-from prompt_toolkit.mouse_events import MouseEventType
+from prompt_toolkit.mouse_events import MouseEventType, MouseButton, MouseEventType as MouseEvent
 from prompt_toolkit.styles import Style
+from prompt_toolkit.output import create_output
+from prompt_toolkit.output.vt100 import Vt100_Output
 
 from .agent import Agent, AgentCancelledError
 from .config import config
 from .memory import memory
 
 logger = logging.getLogger(__name__)
+
+# TUI constants
+POLL_INTERVAL = 0.03
+PROGRESS_DISPLAY_THRESHOLD = 0.5
+PROGRESS_BAR_WIDTH = 20
 
 
 class OutputLexer(Lexer):
@@ -77,8 +86,7 @@ class _OutputWindow(Window):
         Parent only moves cursor when it's at the bottom edge — which
         causes scroll to be reverted by the render loop for other positions.
         """
-        info = self.render_info
-        if info is None or info.vertical_scroll <= 0:
+        if self.vertical_scroll <= 0:
             return
         self.content.move_cursor_up()
         self.vertical_scroll -= 1
@@ -91,14 +99,73 @@ class _OutputWindow(Window):
         info = self.render_info
         if info is None:
             return
-        if info.vertical_scroll >= info.content_height - info.window_height:
+        if self.vertical_scroll >= max(0, info.content_height - info.window_height):
             # At visual bottom — pin cursor to absolute end for precision
             buf = self._tui._output_buffer
             buf.cursor_position = len(buf.text) if buf.text else 0
             self._tui._auto_scroll = True
+            # Sync vertical_scroll to actual bottom to prevent re-triggering
+            self.vertical_scroll = max(0, info.content_height - info.window_height)
             return
         self.content.move_cursor_down()
         self.vertical_scroll += 1
+
+    def _scroll_when_linewrapping(self, ui_content, width, height):
+        """Override to skip cursor-based scroll clamping when user has manually scrolled.
+
+        When auto_scroll is True, cursor is at the document end and the parent
+        clamping works correctly. When auto_scroll is False, the user has manually
+        scrolled and we must preserve their scroll position — only clamping to
+        prevent out-of-bounds.
+        """
+        if self._tui._auto_scroll:
+            super()._scroll_when_linewrapping(ui_content, width, height)
+            return
+
+        # User has manually scrolled. Skip cursor-based clamping.
+        # Only ensure vertical_scroll is within [0, topmost_visible].
+        self.horizontal_scroll = 0
+        self.vertical_scroll_2 = 0
+
+        if width <= 0 or ui_content.line_count == 0:
+            return
+
+        def get_line_height(lineno):
+            return ui_content.get_height_for_line(lineno, width, self.get_line_prefix)
+
+        # Calculate topmost_visible (same logic as parent)
+        prev_lineno = ui_content.line_count - 1
+        used_height = 0
+        for lineno in range(ui_content.line_count - 1, -1, -1):
+            used_height += get_line_height(lineno)
+            if used_height > height:
+                break
+            prev_lineno = lineno
+        topmost_visible = prev_lineno
+
+        # Clamp vertical_scroll to valid bounds only — do NOT force cursor position
+        self.vertical_scroll = max(0, min(self.vertical_scroll, topmost_visible))
+
+
+class _InputWindow(Window):
+    """自定义输入窗口，支持右键粘贴"""
+    def mouse_handler(self, mouse_event):
+        logger.info(f"[MOUSE] _InputWindow: type={mouse_event.event_type} "
+                     f"button={mouse_event.button} pos={mouse_event.position}")
+        if (mouse_event.event_type == MouseEventType.MOUSE_DOWN
+            and mouse_event.button == MouseButton.RIGHT):  # 右键
+            try:
+                buf = self.content.buffer
+                clipboard_data = self.app.clipboard.get_data()
+                if clipboard_data and hasattr(clipboard_data, 'text') and clipboard_data.text:
+                    buf.insert_text(clipboard_data.text)
+                    logger.info(f"[MOUSE] 右键粘贴成功: {clipboard_data.text[:30]}")
+                else:
+                    logger.info("[MOUSE] 右键粘贴: 剪切板为空")
+            except Exception as e:
+                logger.warning(f"右键粘贴失败: {e}")
+            return None  # 事件已处理
+        return super().mouse_handler(mouse_event)
 
 
 class SimpleTUI:
@@ -155,10 +222,20 @@ class SimpleTUI:
         self._compact_indicator: str = ""  # 压缩状态指示器
 
         # Input buffer - handles user input with history
+        from .commands import command_registry, SlashCommandCompleter, init_commands
+        init_commands()
+        self._slash_completer = SlashCommandCompleter(command_registry)
+        self._dummy_completer = DummyCompleter()
         self.input_buffer = Buffer(
             name="input_buffer",
             multiline=True,
             history=None,
+            completer=DynamicCompleter(lambda: (
+                self._slash_completer
+                if self.input_buffer.text.startswith('/')
+                else self._dummy_completer
+            )),
+            complete_while_typing=True,
         )
 
         # Queue for thread-safe output from Agent -> UI
@@ -176,6 +253,8 @@ class SimpleTUI:
         self._layout = self._create_layout()
         self._kb = self._create_key_bindings()
 
+        logger.info("TUI initialized")
+
         # Enable mouse support for scroll + text selection via BufferControl
         # Use PyperclipClipboard for real Windows clipboard integration
         self.app = Application(
@@ -185,6 +264,7 @@ class SimpleTUI:
             full_screen=True,
             mouse_support=True,
             clipboard=PyperclipClipboard(),
+            output=Vt100_Output.from_pty(sys.stdout),
         )
 
         # Input history list for up/down navigation
@@ -213,6 +293,15 @@ class SimpleTUI:
             "context_usage_high": "fg:#ff8800",   # orange - 85-94%
             "context_usage_critical": "fg:red bold",  # red - >= 95%
             "compact_indicator": "fg:cyan italic",
+            "autonomous": "fg:magenta bold",
+            # 斜杠命令样式
+            "command": "fg:green bold",
+            "command_header": "fg:cyan bold",
+            # 补全菜单样式
+            "completion-menu": "bg:#1a1a2e",
+            "completion-menu.completion": "fg:white",
+            "completion-menu.completion.meta": "fg:#888888",
+            "completion-menu.completion.selected": "bg:#16213e fg:cyan bold",
         })
 
     # ── Helpers ──────────────────────────────────────────
@@ -222,9 +311,9 @@ class SimpleTUI:
         parts = []
 
         # Context usage progress bar (show when >= 50%)
-        if self._context_usage_ratio >= 0.5:
-            filled = int(self._context_usage_ratio * 20)
-            bar = "█" * filled + "░" * (20 - filled)
+        if self._context_usage_ratio >= PROGRESS_DISPLAY_THRESHOLD:
+            filled = int(self._context_usage_ratio * PROGRESS_BAR_WIDTH)
+            bar = "█" * filled + "░" * (PROGRESS_BAR_WIDTH - filled)
             ratio_pct = int(self._context_usage_ratio * 100)
 
             # 颜色根据使用率变化
@@ -241,21 +330,31 @@ class SimpleTUI:
 
         # Token 信息
         if self._token_text:
-            if parts:
-                parts.append(("class:token_info", f" {self._token_text}"))
-            else:
-                parts.append(("class:token_info", f" {self._token_text}"))
+            parts.append(("class:token_info", f" {self._token_text}"))
 
         # 压缩指示器
         if self._compact_indicator:
             parts.append(("class:compact_indicator", f" {self._compact_indicator}"))
 
+        # Autonomous mode status
+        if self.agent and getattr(self.agent, '_autonomous_running', False):
+            pending = self.agent.get_pending_count()
+            if pending > 0:
+                parts.append(("class:autonomous", f" [AUTO:{pending}]"))
+            else:
+                parts.append(("class:autonomous", " [AUTO:idle]"))
+
         return parts if parts else []
 
     def _get_prompt_fragments(self) -> list[tuple[str, str]]:
         """Return prompt text, changing indicator when agent is running."""
+        if self.agent and getattr(self.agent, '_autonomous_running', False):
+            return [("class:autonomous", "[AUTO]>")]
         if self._agent_running:
             return [("class:prompt", ">>>")]
+        # 斜杠命令模式 — 动态提示符
+        if self.input_buffer.text.startswith('/'):
+            return [("class:prompt", "/ ")]
         return [("class:prompt", "> ")]
 
     def _output_has_selection(self) -> bool:
@@ -269,7 +368,7 @@ class SimpleTUI:
             return 0
         if line > len(lines):
             return len(full_text)
-        return sum(len(l) + 1 for l in lines[:line])
+        return sum(len(line_text) + 1 for line_text in lines[:line])
 
     # ── Scroll ───────────────────────────────────────────
 
@@ -310,39 +409,65 @@ class SimpleTUI:
                 self._fragments = self._fragments[-self.MAX_FRAGMENTS:]
 
     def _rebuild_buffer(self) -> None:
-        """Rebuild Buffer document and line_styles from fragments."""
+        """Rebuild Buffer document and line_styles from fragments.
+
+        Takes an atomic snapshot of fragments under lock, then builds
+        line_styles and full_text from the snapshot to ensure consistency.
+        """
         with self._fragments_lock:
             fragments = list(self._fragments)
+            auto_scroll = self._auto_scroll
+            cursor_pos_current = self._output_buffer.cursor_position
 
         if not fragments:
             self._line_styles = []
-            self._output_buffer.reset(Document(""), append_to_history=False)
+            sel_state = self._output_buffer.selection_state
+            self._output_buffer.set_document(Document(""), bypass_readonly=True)
+            self._output_buffer.selection_state = sel_state
             self.app.invalidate()
             return
 
         full_text = ''.join(text for _, text in fragments)
 
-        # Build line_styles: each \n completes a line styled by the current fragment
-        self._line_styles = []
-        for style, text in fragments:
-            self._line_styles.extend([style] * text.count('\n'))
-        self._line_styles.append(fragments[-1][0])  # style for final line
+        # Build line_styles from the snapshot — guaranteed consistent
+        line_styles = []
+        frag_idx = 0
+        frag_offset = 0
+        current_style = fragments[0][0] if fragments else ""
 
-        if self._auto_scroll:
+        for ch_idx, ch in enumerate(full_text):
+            while frag_idx < len(fragments) and ch_idx >= frag_offset + len(fragments[frag_idx][1]):
+                frag_offset += len(fragments[frag_idx][1])
+                frag_idx += 1
+            if frag_idx < len(fragments):
+                current_style = fragments[frag_idx][0]
+            if ch == '\n' or ch_idx == len(full_text) - 1:
+                line_styles.append(current_style)
+
+        # Trim to match document.lines length (trailing \n may cause off-by-one)
+        doc_line_count = full_text.count('\n') + (1 if full_text and not full_text.endswith('\n') else 0)
+        line_styles = line_styles[:doc_line_count]
+
+        if auto_scroll:
             cursor_pos = len(full_text)
         else:
-            # Preserve cursor position (pinned to vertical_scroll top line).
-            # New content only appends at the end, so existing line offsets
-            # are stable and the stored cursor_position remains valid.
-            cursor_pos = min(self._output_buffer.cursor_position, len(full_text))
+            cursor_pos = min(cursor_pos_current, len(full_text))
 
-        self._output_buffer.reset(
-            Document(text=full_text, cursor_position=cursor_pos),
-            append_to_history=False,
-        )
-        if self._auto_scroll:
-            self._output_buffer.selection_state = None
-
+        # Apply computed state atomically
+        self._line_styles = line_styles
+        # Preserve selection state — set_document() clears it via _text_changed
+        sel_state = self._output_buffer.selection_state
+        # Save scroll position before buffer update
+        saved_vertical_scroll = self.output_window.vertical_scroll
+        # Use set_document to properly fire on_text_changed event chain
+        new_doc = Document(text=full_text, cursor_position=cursor_pos)
+        self._output_buffer.set_document(new_doc, bypass_readonly=True)
+        # Restore selection (cleared by _text_changed)
+        self._output_buffer.selection_state = sel_state
+        # Restore scroll position when user has manually scrolled
+        if not auto_scroll:
+            self.output_window.vertical_scroll = saved_vertical_scroll
+        # Invalidate after all state is consistent
         self.app.invalidate()
 
     # ── Layout ───────────────────────────────────────────
@@ -361,11 +486,11 @@ class SimpleTUI:
         input_row = VSplit([
             Window(
                 content=FormattedTextControl(self._get_prompt_fragments, focusable=False),
-                width=3,
+                width=9,
                 style="class:prompt",
                 dont_extend_height=True,
             ),
-            Window(
+            _InputWindow(
                 content=BufferControl(buffer=self.input_buffer, focus_on_click=True),
                 style="class:input_area",
                 dont_extend_height=True,
@@ -409,6 +534,8 @@ class SimpleTUI:
             if self._agent_running:
                 self._agent_stop_event.set()
                 self._output_queue.put(("text", "\n[Cancelling agent...]\n"))
+                if hasattr(self, '_cron_scheduler') and self._cron_scheduler:
+                    self._cron_scheduler.stop()
                 self._exit_requested = True
             else:
                 event.app.exit()
@@ -418,6 +545,8 @@ class SimpleTUI:
             if self._agent_running:
                 self._agent_stop_event.set()
                 self._output_queue.put(("text", "\n[Cancelling agent...]\n"))
+                if hasattr(self, '_cron_scheduler') and self._cron_scheduler:
+                    self._cron_scheduler.stop()
                 self._exit_requested = True
             else:
                 event.app.exit()
@@ -478,13 +607,7 @@ class SimpleTUI:
         def end(event):
             self._scroll_to_bottom()
 
-        # Block Enter while agent is running
-        @kb.add(Keys.Enter, filter=Condition(lambda: self._agent_running))
-        def enter_while_busy(event):
-            """Prevent Enter from being processed while agent is running."""
-            pass
-
-        # Enter: send all content
+        # Enter: send all content (agent idle)
         @kb.add(Keys.Enter, filter=Condition(lambda: not self._agent_running))
         def enter_send(event):
             """Send all content (Enter)"""
@@ -492,26 +615,75 @@ class SimpleTUI:
             text = buf.text
             if not text:
                 return
+            if text.strip().lower() in ("exit", "quit", "q"):
+                event.app.exit()
+                return
+            # ── 斜杠命令拦截 — 始终可用 ──
+            if text.strip().startswith('/'):
+                cmd_text = text.strip()
+                buf.text = ""
+                self._input_history.append(cmd_text)
+                self._history_index = len(self._input_history)
+                self._execute_slash_command(cmd_text)
+                return
             buf.text = ""
             self._input_history.append(text)
             self._history_index = len(self._input_history)
             self._output_queue.put(("user_input", text))
             self._scroll_to_bottom()
-            self._agent_running = True
-            self._agent_stop_event.clear()
-            self._output_queue.put(("token_info", f" {config.thinking_indicator}... "))
-            threading.Thread(target=self._run_agent, args=(text,), daemon=True).start()
+
+            if self.agent and self.agent._autonomous_mode:
+                self._agent_stop_event.clear()
+                self.agent.submit_work(text, source="user")
+                self._agent_running = True
+                logger.debug("Agent running: True (autonomous submit)")
+                self._output_queue.put(("token_info", f" {config.thinking_indicator}... "))
+            else:
+                self._agent_running = True
+                logger.debug("Agent running: True (new thread)")
+                self._agent_stop_event.clear()
+                self._output_queue.put(("token_info", f" {config.thinking_indicator}... "))
+                threading.Thread(target=self._run_agent, args=(text,), daemon=True).start()
+
+        # Agent 运行时 — 仅允许斜杠命令，阻塞普通输入
+        @kb.add(Keys.Enter, filter=Condition(lambda: self._agent_running))
+        def enter_while_busy(event):
+            """Agent 运行时允许斜杠命令和转发普通输入到自主循环。"""
+            buf = event.app.current_buffer
+            text = buf.text
+            if not text:
+                return
+            if text.strip().startswith('/'):
+                cmd_text = text.strip()
+                buf.text = ""
+                self._input_history.append(cmd_text)
+                self._history_index = len(self._input_history)
+                self._execute_slash_command(cmd_text)
+            elif self.agent and self.agent._autonomous_mode:
+                buf.text = ""
+                self._input_history.append(text)
+                self._history_index = len(self._input_history)
+                self._output_queue.put(("user_input", text))
+                self.agent.submit_work(text, source="user")
+                self._scroll_to_bottom()
 
         # Ctrl+J: insert newline (for multiline input)
         @kb.add(Keys.ControlJ, filter=Condition(lambda: not self._agent_running))
         def ctrl_j_newline(event):
             """Insert newline into input buffer"""
-            from prompt_toolkit.document import Document
             buf = self.input_buffer
             pos = buf.cursor_position
             new_text = buf.text[:pos] + "\n" + buf.text[pos:]
             new_doc = Document(text=new_text, cursor_position=pos + 1)
             buf.set_document(new_doc, bypass_readonly=True)
+
+        # Ctrl+V: paste from clipboard
+        @kb.add(Keys.ControlV)
+        def ctrl_v_paste(event):
+            """Ctrl+V paste from clipboard"""
+            data = event.app.clipboard.get_data()
+            if data:
+                event.app.current_buffer.insert_text(data.text)
 
         # Left: move cursor,跨行移动到上一行末尾
         @kb.add(Keys.Left)
@@ -556,38 +728,6 @@ class SimpleTUI:
 
         return kb
 
-    # ── Input Handling ───────────────────────────────────
-
-    def _on_submit(self, buf: Buffer) -> bool:
-        """Called when user presses Ctrl+J (send) in the input buffer"""
-        text = buf.text
-        if not text:
-            return True
-
-        buf.text = ""
-
-        # Reject concurrent agent runs
-        if self._agent_running:
-            self._output_queue.put(("text", "\n[Agent is already running -- wait for completion]\n"))
-            return True
-
-        self._input_history.append(text)
-        self._history_index = len(self._input_history)
-
-        if text.lower() in ["exit", "quit", "q"]:
-            self.app.exit()
-            return True
-
-        # Queue user input for thread-safe processing in poll loop
-        self._output_queue.put(("user_input", text))
-        self._scroll_to_bottom()
-
-        self._agent_running = True
-        self._agent_stop_event.clear()
-        self._output_queue.put(("token_info", f" {config.thinking_indicator}... "))
-        threading.Thread(target=self._run_agent, args=(text,), daemon=True).start()
-        return True
-
     # ── Output Handling ──────────────────────────────────
 
     def _on_output(self, msg_type: str, text: str) -> None:
@@ -598,14 +738,56 @@ class SimpleTUI:
 
     def _run_agent(self, user_input: str) -> None:
         """Run agent in background thread"""
+        logger.info(f"Agent execution started: {user_input[:80]}")
         try:
             self.agent.run(user_input)
         except AgentCancelledError:
             self._output_queue.put(("text", "\n[Agent cancelled]\n"))
         except Exception as e:
+            logger.error(f"Agent execution failed: {e}")
             self._output_queue.put(("text", f"\nError: {e}\n"))
         finally:
             self._output_queue.put(("_agent_done", ""))
+
+    def _execute_slash_command(self, cmd_text: str) -> None:
+        """解析并执行斜杠命令。主线程同步执行。"""
+        logger.info(f"Slash command: {cmd_text}")
+        from .commands import command_registry
+
+        parts = cmd_text.split(None, 1)
+        cmd_name = parts[0].lstrip('/')  # 去掉前导 /（支持 "/ command" 写法）
+        args = parts[1] if len(parts) > 1 else ""
+
+        # 在输出中显示命令
+        with self._fragments_lock:
+            self._fragments.append(("class:user", f"\n{cmd_text}\n"))
+
+        cmd = command_registry.get(cmd_name)
+        if cmd is None:
+            with self._fragments_lock:
+                logger.warning(f"Unknown command: /{cmd_name}")
+                self._fragments.append(("class:error",
+                    f"未知命令: /{cmd_name}\n输入 /help 查看可用命令\n"))
+            # 失败命令从历史记录中移除
+            if self._input_history and self._input_history[-1] == cmd_text:
+                self._input_history.pop()
+                self._history_index = len(self._input_history)
+            self._rebuild_buffer()
+            return
+
+        try:
+            cmd.handler(self, args)
+        except Exception as e:
+            with self._fragments_lock:
+                self._fragments.append(("class:error",
+                    f"命令错误: {type(e).__name__}: {e}\n"))
+            # 执行失败也从历史记录中移除
+            if self._input_history and self._input_history[-1] == cmd_text:
+                self._input_history.pop()
+                self._history_index = len(self._input_history)
+
+        self._scroll_to_bottom()
+        self._rebuild_buffer()
 
     # ── Queue Polling ────────────────────────────────────
 
@@ -626,6 +808,7 @@ class SimpleTUI:
                 # Process one message
                 if msg_type == "_agent_done":
                     self._agent_running = False
+                    logger.debug("Agent running: False (_agent_done)")
                     if self._exit_requested:
                         self._exit_requested = False
                         self.app.exit()
@@ -643,16 +826,42 @@ class SimpleTUI:
                 elif msg_type == "user_input":
                     with self._fragments_lock:
                         self._fragments.append(("class:user", f"\n> {text}\n"))
+                elif msg_type == "tool_call":
+                    with self._fragments_lock:
+                        self._fragments.append(("class:tool_call", text))
+                elif msg_type == "tool_result":
+                    with self._fragments_lock:
+                        self._fragments.append(("class:tool_result", text))
                 elif msg_type == "token_info":
                     self._token_text = text
+                    self.app.invalidate()
                 elif msg_type == "context_usage":
-                    # 格式: "context_usage:0.52"
                     try:
-                        self._context_usage_ratio = float(text.split(":")[1])
+                        self._context_usage_ratio = float(text)
                     except (ValueError, IndexError):
-                        pass
+                        logger.warning(f"Failed to parse context_usage: {text!r}")
+                    self.app.invalidate()
                 elif msg_type == "compact":
                     self._compact_indicator = text
+                    self.app.invalidate()
+                elif msg_type == "cron_notify":
+                    with self._fragments_lock:
+                        self._fragments.append(("class:autonomous", f"\n[Cron: {text}]\n"))
+                elif msg_type == "sleep_status":
+                    with self._fragments_lock:
+                        self._fragments.append(("class:thinking", f"\n[Sleep: {text}]\n"))
+                elif msg_type == "command":
+                    with self._fragments_lock:
+                        self._fragments.append(("class:command", text))
+                elif msg_type == "error":
+                    with self._fragments_lock:
+                        self._fragments.append(("class:error", text))
+                elif msg_type == "_autonomous_done":
+                    self._agent_running = False
+                    logger.debug("Agent running: False (_autonomous_done)")
+                    if self._exit_requested:
+                        self._exit_requested = False
+                        self.app.exit()
                 else:
                     with self._fragments_lock:
                         self._fragments.append(("", text))
@@ -662,7 +871,7 @@ class SimpleTUI:
                 self._prune_fragments()
                 self._rebuild_buffer()
 
-            await asyncio.sleep(0.03)
+            await asyncio.sleep(POLL_INTERVAL)
 
     # ── Welcome ──────────────────────────────────────────
 
@@ -674,23 +883,37 @@ class SimpleTUI:
             "  AGImyCLI - TUI AGI Interaction Tool",
             f"  Model: {config.model}",
             f"  {scroll_hint}  Ctrl+C:quit",
+        ]
+        lines.append("  Mode: Autonomous (Ctrl+C to stop)")
+        lines.extend([
             "=" * 60,
             "",
             "I fully understand and will strictly adhere to all Core Operational Guidelines.",
             "",
-        ]
-        self._fragments.append(("", "\n".join(lines)))
+        ])
+        with self._fragments_lock:
+            self._fragments.append(("", "\n".join(lines)))
 
     # ── Run ──────────────────────────────────────────────
 
     def run(self) -> None:
         """Run the TUI Application"""
+        logger.info("TUI application starting")
         self.agent = Agent(
             output_callback=self._on_output,
             stop_event=self._agent_stop_event,
         )
         self._print_welcome()
         self._rebuild_buffer()
+
+        from .cron.scheduler import CronScheduler
+        self._cron_scheduler = CronScheduler(
+            self.agent, config.cron_tasks,
+            tick_interval_minutes=config.tick_interval_minutes
+        )
+        self._cron_scheduler.start()
+        self._fragments.append(("class:autonomous",
+            f"\n[自主模式已启用 — {len(config.cron_tasks)} 个定时任务]\n"))
 
         async def _main():
             self._poll_task = asyncio.create_task(self._poll_output_queue())
@@ -699,11 +922,17 @@ class SimpleTUI:
             finally:
                 if self._poll_task:
                     self._poll_task.cancel()
+                if self._cron_scheduler:
+                    self._cron_scheduler.stop()
 
         try:
             asyncio.run(_main())
         except KeyboardInterrupt:
-            pass
+            if self._cron_scheduler:
+                self._cron_scheduler.stop()
+        finally:
+            if self._cron_scheduler:
+                self._cron_scheduler.stop()
 
 
 def run_tui() -> None:
@@ -715,4 +944,4 @@ def run_tui() -> None:
         pass
     except Exception as e:
         import traceback
-        traceback.print_exc()
+        logger.error(f"TUI fatal error: {e}\n{traceback.format_exc()}")

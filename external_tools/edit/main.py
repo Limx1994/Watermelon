@@ -8,6 +8,12 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+# Set UTF-8 encoding for stdout to avoid GBK encoding errors on Chinese Windows
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout = os.fdopen(os.dup(sys.stdout.fileno()), mode='w', encoding='utf-8', buffering=1)
+if sys.stderr.encoding != 'utf-8':
+    sys.stderr = os.fdopen(os.dup(sys.stderr.fileno()), mode='w', encoding='utf-8', buffering=1)
+
 # ============================================================
 # 常量
 # ============================================================

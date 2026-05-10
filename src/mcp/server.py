@@ -1,9 +1,12 @@
 """MCP Server implementation for exposing built-in tools"""
 
+import logging
 from typing import Any, Dict, List
 
 from .protocol import MCPProtocol
 from ..tools.registry import registry
+
+logger = logging.getLogger(__name__)
 
 
 class MCPServer:
@@ -30,6 +33,7 @@ class MCPServer:
 
     def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Call a tool and return the result"""
+        logger.info(f"MCP call_tool: {tool_name}")
         result = registry.execute_tool(tool_name, **arguments)
         return result.to_dict()
 
@@ -42,6 +46,7 @@ class MCPServer:
         method = request.get("method")
         req_id = request.get("id")
         params = request.get("params", {})
+        logger.debug(f"MCP server handle_request: method={method} id={req_id}")
 
         if method == self.protocol.TOOL_LIST:
             tools = self.list_tools()
@@ -58,6 +63,7 @@ class MCPServer:
             return self.protocol.create_response(req_id, {"definitions": definitions})
 
         else:
+            logger.warning(f"Unknown method: {method}")
             return self.protocol.create_error(
                 req_id,
                 self.protocol.METHOD_NOT_FOUND,

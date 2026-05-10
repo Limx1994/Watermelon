@@ -2,8 +2,20 @@
 
 import json
 import logging
+import subprocess
 import threading
-from typing import Any, Callable, Dict, List, Optional, Tuple
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+
+logger = logging.getLogger(__name__)
+from collections import deque
+from typing import Any, Callable, Dict, List, Optional
+
+# Tools that are safe to run concurrently (read-only)
+CONCURRENT_SAFE_TOOLS = {"read_file", "grep", "glob", "sleep"}
+MAX_CONCURRENT_TOOLS = 10
+TRUNCATE_CONTENT_LENGTH = 20000
 
 from .config import config
 from .llm.client import (
@@ -12,18 +24,139 @@ from .llm.client import (
     create_user_message,
     create_assistant_message,
     create_tool_result_message,
+    is_network_error,
 )
 from .tools.registry import registry
 from .tools.loader import load_external_tools
 from .mcp.server import MCPServer
 from .mcp.manager import MCPManager
 from .memory import memory, CompactEngine
-from .utils.token_counter import count_tokens, count_messages_tokens
+from .utils.token_counter import count_tokens
 
 
 class AgentCancelledError(Exception):
     """Raised when the agent run is cancelled (e.g. user pressed Ctrl+C)."""
     pass
+
+
+def classify_error(e: Exception) -> str:
+    """分类错误类型"""
+    error_str = str(e).lower()
+
+    # 网络错误
+    if is_network_error(e):
+        return "network"
+
+    # API状态错误
+    from openai import APIStatusError, RateLimitError
+    if isinstance(e, RateLimitError):
+        return "rate_limit"
+    if isinstance(e, APIStatusError):
+        if hasattr(e, 'status_code'):
+            status_code = e.status_code
+            if status_code == 400:
+                if any(kw in error_str for kw in ("context", "too long", "length", "token", "max_tokens")):
+                    return "context"
+                return "api_client"
+            elif status_code == 401:
+                return "api_auth"
+            elif status_code == 403:
+                return "api_permission"
+            elif status_code == 404:
+                return "api_not_found"
+            elif status_code == 408:
+                return "api_timeout"
+            elif status_code == 429:
+                return "rate_limit"
+            elif 500 <= status_code < 600:
+                return "api_server"
+            elif 400 <= status_code < 500:
+                return "api_client"
+
+    # 上下文相关错误
+    if any(kw in error_str for kw in ("context", "too long", "length", "token", "max_tokens")):
+        return "context"
+
+    # 内存错误
+    if any(kw in error_str for kw in ("memory", "out of memory", "oom")):
+        return "memory"
+
+    # 磁盘错误
+    if any(kw in error_str for kw in ("disk", "no space", "write", "read-only")):
+        return "disk"
+
+    # 权限错误
+    if any(kw in error_str for kw in ("permission", "access denied", "denied", "forbidden")):
+        return "permission"
+
+    # MCP错误
+    if any(kw in error_str for kw in ("mcp", "json-rpc", "mcp server")):
+        return "mcp"
+
+    # 工具错误
+    if any(kw in error_str for kw in ("tool", "execution", "invalid arguments")):
+        return "tool"
+
+    return "unknown"
+
+
+def get_error_config(error_type: str) -> dict:
+    """获取错误类型的配置"""
+    configs = {
+        "network": {"max_retries": config.network_max_retries, "base_interval": config.network_retry_interval_seconds, "max_interval": 120, "exponential": True},
+        "rate_limit": {"max_retries": 5, "base_interval": 60, "max_interval": 300, "exponential": True},
+        "api_server": {"max_retries": 3, "base_interval": 30, "max_interval": 60, "exponential": True},
+        "api_timeout": {"max_retries": 3, "base_interval": 30, "max_interval": 60, "exponential": True},
+        "context": {"max_retries": 2, "base_interval": 5, "max_interval": 10, "exponential": False},
+        "memory": {"max_retries": 2, "base_interval": 10, "max_interval": 20, "exponential": False},
+        "mcp": {"max_retries": 3, "base_interval": 10, "max_interval": 30, "exponential": True},
+        "unknown": {"max_retries": 2, "base_interval": 30, "max_interval": 60, "exponential": True},
+        # 不可重试错误
+        "api_client": {"max_retries": 0},
+        "api_auth": {"max_retries": 0},
+        "api_permission": {"max_retries": 0},
+        "api_not_found": {"max_retries": 0},
+        "disk": {"max_retries": 0},
+        "permission": {"max_retries": 0},
+        "tool": {"max_retries": 0},
+    }
+    return configs.get(error_type, configs["unknown"])
+
+
+def get_error_message(error_type: str, e: Exception, retry_count: int = 0, max_retries: int = 0) -> str:
+    """获取用户友好的错误消息"""
+    error_msg = str(e)[:200]
+    retry_info = f" ({retry_count}/{max_retries})" if max_retries > 0 else ""
+
+    messages = {
+        "network": f"[网络错误] {type(e).__name__}: {error_msg}{retry_info}\n正在重试...",
+        "rate_limit": f"[速率限制] {type(e).__name__}: {error_msg}{retry_info}\n等待后重试...",
+        "api_server": f"[API服务器错误] {type(e).__name__}: {error_msg}{retry_info}\n服务器暂时不可用，请稍后重试",
+        "api_timeout": f"[请求超时] {type(e).__name__}: {error_msg}{retry_info}\n正在重试...",
+        "api_client": f"[API客户端错误] {type(e).__name__}: {error_msg}\n请检查API配置",
+        "api_auth": f"[认证失败] {type(e).__name__}: {error_msg}\n请检查API密钥",
+        "api_permission": f"[权限不足] {type(e).__name__}: {error_msg}\n请检查账户权限",
+        "api_not_found": f"[模型不存在] {type(e).__name__}: {error_msg}\n请检查模型名称",
+        "context": f"[上下文过长] {type(e).__name__}: {error_msg}{retry_info}\n正在压缩上下文...",
+        "memory": f"[内存不足] {type(e).__name__}: {error_msg}{retry_info}\n正在释放资源...",
+        "disk": f"[磁盘错误] {type(e).__name__}: {error_msg}\n请检查磁盘空间",
+        "permission": f"[权限错误] {type(e).__name__}: {error_msg}\n请检查文件权限",
+        "mcp": f"[MCP错误] {type(e).__name__}: {error_msg}{retry_info}\n正在重连MCP服务器...",
+        "tool": f"[工具错误] {type(e).__name__}: {error_msg}\n请检查工具参数",
+        "unknown": f"[未知错误] {type(e).__name__}: {error_msg}{retry_info}\n详情见日志",
+    }
+    return messages.get(error_type, messages["unknown"])
+
+
+def get_retry_interval(error_type: str, retry_count: int) -> int:
+    """计算重试间隔（秒）"""
+    err_config = get_error_config(error_type)
+    if not err_config.get("exponential", False):
+        return err_config.get("base_interval", 30)
+
+    base = err_config.get("base_interval", 30)
+    max_interval = err_config.get("max_interval", 120)
+    return min(base * (2 ** (retry_count - 1)), max_interval)
 
 
 class Agent:
@@ -40,87 +173,179 @@ class Agent:
         self.mcp_server = MCPServer()
         self.mcp_manager = MCPManager(config.mcp_enabled, config.mcp_servers)
         self.mcp_manager.connect_all()
+        # Autonomous mode infrastructure (must init before _setup_tools)
+        self._pending_inputs: deque = deque()
+        self._pending_lock = threading.Lock()
+        self._work_event = threading.Event()
+        self._sleep_event = threading.Event()
+        self._autonomous_mode = False
+        self._autonomous_running = False
+        self._is_sleeping = False
+        self._first_tick = True
+        self._run_lock = threading.RLock()
         self._setup_tools()
         # Track reasoning_content for multi-turn in thinking mode
         self._last_reasoning: str = ""
         self.total_tokens: float = 0  # 累计token消耗
         # 上下文压缩引擎
         self._compact_engine = CompactEngine(memory)
+        logger.info(f"Agent initialized: model={config.model}")
         # API 返回的 usage 信息
         self._last_usage: Optional[Dict[str, int]] = None
+        # Stop hooks: callable(messages, tool_results) -> Optional[str]
+        self._stop_hooks: list = []
 
     def _setup_tools(self) -> None:
         """Register built-in tools"""
         registry.clear()
+        logger.debug("Tool registry cleared")
         load_external_tools()
-
-    def _get_all_tool_definitions(self) -> List[Dict[str, Any]]:
-        """Get all available tool definitions (built-in + MCP)"""
-        definitions = self.mcp_server.get_tool_definitions()
-        definitions.extend(self.mcp_manager.get_all_tool_definitions())
-        # 过滤掉未启用的工具
-        enabled = set(config.enabled_tools)
-        definitions = [d for d in definitions if d.get("function", {}).get("name") in enabled]
-        return definitions
+        from .tools.sleep import SleepTool
+        sleep_tool = SleepTool(self._sleep_event, agent=self)
+        registry.register(sleep_tool)
+        logger.info(f"Tools registered: {registry.list_tools()}")
 
     def _execute_tool_call(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute a tool call and return the result"""
-        # Check built-in tools first
-        tool = registry.get(tool_name)
-        if tool:
-            result = tool.execute(**arguments)
-            return result.to_dict()
+        """Execute a tool call and return the result. Never raises."""
+        try:
+            tool = registry.get(tool_name)
+            if tool:
+                logger.info(f"[agent] calling {tool_name}({list(arguments.keys())})")
+                result = tool.execute(**arguments)
+                logger.info(f"[agent] {tool_name} -> success={result.success} content={len(result.content or '')}B")
+                return result.to_dict()
+            logger.info(f"[agent] routing {tool_name} to MCP")
+            return self.mcp_manager.call_tool(tool_name, arguments)
+        except AgentCancelledError:
+            raise
+        except Exception as e:
+            logger.error(f"[agent] {tool_name} failed: {type(e).__name__}: {e}", exc_info=True)
+            return {
+                "success": False,
+                "error": f"Tool execution error: {type(e).__name__}: {str(e)[:500]}"
+            }
 
-        # Check MCP manager (handles all external MCP clients)
-        return self.mcp_manager.call_tool(tool_name, arguments)
+    def submit_work(self, text: str, source: str = "cron") -> None:
+        """Submit work to the agent's pending queue. Thread-safe."""
+        with self._pending_lock:
+            self._pending_inputs.append({"text": text, "source": source})
+            queue_size = len(self._pending_inputs)
+        self._work_event.set()
+        self._sleep_event.set()
+        logger.info(f"Work submitted: source={source}, queue_size={queue_size}")
 
-    def _stream_output(self, text: str, msg_type: str = "text") -> None:
+    def get_pending_count(self) -> int:
+        """Get number of pending autonomous tasks. Thread-safe."""
+        with self._pending_lock:
+            return len(self._pending_inputs)
+
+    def register_stop_hook(self, hook: Callable) -> None:
+        """Register a stop hook. hook(messages, tool_calls) -> Optional[str].
+        Returns error message to inject if AI should be forced to continue, or None."""
+        self._stop_hooks.append(hook)
+
+    def _run_stop_hooks(self, messages: list, tool_results: list) -> Optional[str]:
+        """Run all stop hooks. Returns first blocking error message, or None."""
+        for hook in self._stop_hooks:
+            try:
+                error = hook(messages, tool_results)
+                if error:
+                    return error
+            except Exception as e:
+                logger.error(f"Stop hook error: {e}")
+        return None
+
+    def _stream_output(self, text: str, msg_type: str = "text", force: bool = False) -> None:
         """Stream output to callback with type indicator.
-        Raises AgentCancelledError if stop_event is set."""
-        if self.stop_event and self.stop_event.is_set():
+        Raises AgentCancelledError if stop_event is set.
+        Use force=True to bypass stop_event check (for cleanup code)."""
+        if not force and self.stop_event and self.stop_event.is_set():
             raise AgentCancelledError()
         if self.output_callback:
             self.output_callback(msg_type, text)
 
+    def _build_project_context(self) -> str:
+        """Build project context injection message (CLAUDE.md + date + gitStatus)."""
+        from .utils.path import resolve_path
+        parts = ["<system-reminder>"]
+        parts.append(f"Current date: {datetime.now().strftime('%Y-%m-%d')}")
+
+        # Inject CLAUDE.md
+        claude_md = resolve_path("CLAUDE.md")
+        if claude_md.exists():
+            try:
+                content = claude_md.read_text(encoding="utf-8")[:3000]
+                parts.append(f"Project instructions:\n{content}")
+                logger.debug(f"Project context: CLAUDE.md loaded ({len(content)} chars)")
+            except Exception as e:
+                logger.warning(f"Project context: failed to read CLAUDE.md: {e}")
+        else:
+            logger.debug("Project context: CLAUDE.md not found")
+
+        # Inject git status
+        try:
+            result = subprocess.run(
+                ["git", "status", "--short"],
+                capture_output=True, text=True,
+                encoding="utf-8", errors="replace",
+                timeout=5,
+                cwd=str(resolve_path("."))
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                parts.append(f"Git status:\n{result.stdout[:1000]}")
+                logger.debug(f"Project context: git status captured ({len(result.stdout)} chars)")
+        except Exception as e:
+            logger.debug(f"Project context: git status failed: {e}")
+
+        parts.append("</system-reminder>")
+        return "\n".join(parts)
+
     def _calculate_context_tokens(self, messages: List[Dict[str, Any]]) -> int:
-        """计算当前 context 的 token 数（system + messages）"""
+        """计算当前 context 的 token 数（system + messages + tool_calls arguments）"""
         system_tokens = count_tokens(config.get_system_prompt())
-        memory_messages = [m for m in messages if m.get("role") != "system"]
-        memory_tokens = sum(count_tokens(m.get("content", "")) for m in memory_messages)
+        memory_tokens = 0
+        for m in messages:
+            if m.get("role") == "system":
+                continue
+            content = m.get("content", "") or ""
+            memory_tokens += count_tokens(content)
+            for tc in m.get("tool_calls", []):
+                args = tc.get("function", {}).get("arguments", "")
+                if args:
+                    memory_tokens += count_tokens(args)
         return int(system_tokens + memory_tokens)
 
     def run(self, user_input: str) -> str:
-        """
-        Run the agent with a user input.
-        Returns the final response text.
-        """
+        """Run the agent with a user input. Returns the final response text."""
+        with self._run_lock:
+            result = self._run_inner(user_input)
+            if not self._autonomous_mode:
+                self.start_autonomous_loop()
+            return result
+
+    def _run_inner(self, user_input: str) -> str:
+        """Internal run logic (called with _run_lock held)."""
         # Build messages for LLM
         messages: List[Dict[str, Any]] = [create_system_message(config.get_system_prompt())]
 
-        # Add memory context
+        # Inject project context (CLAUDE.md + date + gitStatus)
+        project_context = self._build_project_context()
+        if project_context:
+            messages.append(create_user_message(project_context))
+
         messages.extend(memory.get_conversation_for_llm())
-
-        # Add current user input
         messages.append(create_user_message(user_input))
-
-        # Add user message to memory
         memory.add_message("user", user_input)
-        # 记录用户消息，用于压缩触发检测
         self._compact_engine.record_user_message()
 
-        # Get all available tools from tools.json + MCP
-        tools = list(self.llm.tools)  # Start with tools from tools.json
-
-        # Add MCP tools via manager
+        # Get all available tools
+        tools = list(self.llm.tools)
         tools.extend(self.mcp_manager.get_all_tool_definitions())
 
-        # 计算当前 context token 数
+        # Pre-loop compression check
         current_tokens = self._calculate_context_tokens(messages)
-
-        # 检查是否需要压缩
         should_compact, level = self._compact_engine.should_compact(
-            current_tokens,
-            config.effective_context_window
+            current_tokens, config.effective_context_window
         )
 
         if should_compact:
@@ -130,19 +355,17 @@ class Agent:
                     f"\n[上下文压缩: L{level} • 节省 ~{result['tokens_saved']} tokens • 移除 {result['messages_removed']} 条消息]\n",
                     "compact"
                 )
-                # 重新计算 token 并重建消息
                 messages = [create_system_message(config.get_system_prompt())]
                 messages.extend(memory.get_conversation_for_llm())
-                # 不再重复添加 user_input，因为 get_conversation_for_llm() 已包含
+                messages.append(create_user_message(config.compact_resume_prompt))
+                messages.append(create_user_message(project_context))
                 current_tokens = self._calculate_context_tokens(messages)
 
-                # 再次检查是否还需要继续压缩（防止压缩循环）
+                # Escalation loop
                 should_compact_again, next_level = self._compact_engine.should_compact(
-                    current_tokens,
-                    config.effective_context_window
+                    current_tokens, config.effective_context_window
                 )
-                while should_compact_again and next_level <= level:
-                    # 升级压缩级别
+                while should_compact_again and next_level < CompactEngine.LEVEL_FULL:
                     next_level = min(next_level + 1, CompactEngine.LEVEL_FULL)
                     result = self._compact_engine.compact(next_level, self.llm)
                     if result["compacted"]:
@@ -150,118 +373,32 @@ class Agent:
                             f"\n[追加压缩: L{next_level} • 节省 ~{result['tokens_saved']} tokens]\n",
                             "compact"
                         )
-                        # 重建消息
                         messages = [create_system_message(config.get_system_prompt())]
                         messages.extend(memory.get_conversation_for_llm())
-                        # 不再重复添加 user_input，因为 get_conversation_for_llm() 已包含
+                        messages.append(create_user_message(config.compact_resume_prompt))
+                        messages.append(create_user_message(project_context))
                         current_tokens = self._calculate_context_tokens(messages)
                     should_compact_again, next_level = self._compact_engine.should_compact(
-                        current_tokens,
-                        config.effective_context_window
+                        current_tokens, config.effective_context_window
                     )
 
-        # 发送 context 使用率到 TUI
+        # Send context usage to TUI
         usage_ratio = current_tokens / config.effective_context_window if config.effective_context_window > 0 else 0
-        self._stream_output(f"context_usage:{usage_ratio:.2f}", "context_usage")
+        self._stream_output(f"{usage_ratio:.2f}", "context_usage")
 
-        # Turn counter to prevent infinite loops
+        # Tool-call loop with needsFollowUp + error recovery
         turns = 0
         max_turns = config.max_turns
-
-        while turns < max_turns:
-            # Check cancellation between iterations
-            if self.stop_event and self.stop_event.is_set():
-                raise AgentCancelledError()
-
-            turns += 1
-
-            # Get LLM response with tool calls
-            tool_calls, reasoning = self.llm.get_tool_calls(messages, tools)
-
-            # If reasoning_content exists AND there are tool calls, we MUST pass it back
-            if reasoning and tool_calls:
-                # Output thinking first (if show_thinking is true)
-                if config.show_thinking and reasoning:
-                    for line in reasoning.split('\n'):
-                        if line.strip():
-                            self._stream_output(f"{line}\n", "thinking")
-                    self._stream_output("\n", "thinking")
-
-                # Create assistant message with reasoning_content
-                assistant_msg = {
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [{
-                        "id": tc["id"],
-                        "type": "function",
-                        "function": {
-                            "name": tc["name"],
-                            "arguments": tc["arguments"]
-                        }
-                    } for tc in tool_calls]
-                }
-                # Add reasoning_content for thinking mode
-                assistant_msg["reasoning_content"] = reasoning
-                messages.append(assistant_msg)
-                self._last_reasoning = reasoning
-            elif tool_calls:
-                # Has tool calls but no reasoning - still need reasoning_content field for thinking mode
-                messages.append({
-                    "role": "assistant",
-                    "content": "",
-                    "reasoning_content": reasoning or "",
-                    "tool_calls": [{
-                        "id": tc["id"],
-                        "type": "function",
-                        "function": {
-                            "name": tc["name"],
-                            "arguments": tc["arguments"]
-                        }
-                    } for tc in tool_calls]
-                })
-
-            if not tool_calls:
-                # No tool calls, this is the final response
-                break
-
-            # Execute tool calls and collect results
-            for tc in tool_calls:
-                tool_name = tc["name"]
-                arguments = json.loads(tc["arguments"]) if isinstance(tc["arguments"], str) else tc["arguments"]
-
-                # Execute tool
-                self._stream_output(f"\n[Calling tool: {tool_name}]\n")
-                result = self._execute_tool_call(tool_name, arguments)
-                # 增加工具调用连续计数
-                self._compact_engine.increment_streak()
-
-                # Add tool result message
-                messages.append(create_tool_result_message(tc["id"], result.get("content", "")))
-
-                # Display result
-                if result.get("success"):
-                    self._stream_output(f"[Result]:\n{result.get('content', '')[:20000]}\n")
-                else:
-                    self._stream_output(f"[Error]: {result.get('error', 'Unknown error')}\n")
-
-                # Note: Don't save tool results to memory - they reference tool_call_ids
-                # that won't be preserved, which would break subsequent turns
-
-        # Get final response from LLM (after all tool executions)
-        # Note: For final response without tool calls, we should NOT include reasoning_content
-
-        # Create a wrapper callback to handle thinking indicator and formatting
-        thinking_started = [False]  # Use list to allow modification in closure
+        final_response = ""
+        final_reasoning = ""
+        thinking_started = [False]
 
         def wrap_callback(text, is_reasoning: bool = False):
             if is_reasoning:
-                # Thinking content - only output when show_thinking is true
                 if config.show_thinking:
                     self._stream_output(text, "thinking")
             else:
-                # Final response
                 if config.show_thinking and not thinking_started[0]:
-                    # First final content - emit answer_start signal
                     self._stream_output("\n", "answer_start")
                     thinking_started[0] = True
                 self._stream_output(text, "answer")
@@ -269,40 +406,337 @@ class Agent:
         def usage_callback(usage: Dict[str, int]):
             self._last_usage = usage
 
-        final_response, final_reasoning, usage = self.llm.chat(
-            messages,
-            tools=tools,
-            stream=True,
-            callback=wrap_callback,
-            usage_callback=usage_callback
-        )
+        consecutive_errors = 0
+        MAX_CONSECUTIVE_ERRORS = 3
 
-        # Add assistant response to memory
+        while turns < max_turns:
+            if self.stop_event and self.stop_event.is_set():
+                raise AgentCancelledError()
+
+            # Warn when approaching turn limit
+            remaining = max_turns - turns
+            if remaining <= 5 and remaining > 0:
+                self._stream_output(f"\n[Warning: {remaining} turns remaining]\n", "compact")
+
+            turns += 1
+
+            # API call with error recovery for prompt-too-long and model degradation
+            try:
+                tool_calls, content, reasoning, finish_reason = self.llm.get_tool_calls(messages, tools)
+                consecutive_errors = 0
+                # Restore original model if it was degraded and succeeded
+                if self.llm.model != self.llm._original_model:
+                    self.llm.restore_model()
+                    self._stream_output(f"\n[模型已恢复: {self.llm.model}]\n", "compact")
+            except Exception as e:
+                error_str = str(e).lower()
+                # Model degradation: try fallback model on first error
+                if config.fallback_config and consecutive_errors == 0:
+                    fb = config.fallback_config
+                    self.llm.switch_model(fb["model"], client=self.llm._fallback_client)
+                    self._stream_output(f"\n[模型降级: {fb['model']}]\n", "compact")
+                    consecutive_errors += 1
+                    continue
+                if any(kw in error_str for kw in ("context", "too long", "length", "token")):
+                    consecutive_errors += 1
+                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                        self._stream_output("\n[Error]: Too many consecutive errors, stopping.\n")
+                        break
+                    self._stream_output(f"\n{config.context_too_long_prompt}\n", "compact")
+                    result = self._compact_engine.compact(CompactEngine.LEVEL_FULL, self.llm)
+                    if result["compacted"]:
+                        messages = [create_system_message(config.get_system_prompt())]
+                        messages.extend(memory.get_conversation_for_llm())
+                        messages.append(create_user_message(config.compact_resume_prompt))
+                        messages.append(create_user_message(project_context))
+                        self._stream_output("[压缩完成 — 重试中...]\n", "compact")
+                        continue
+                raise
+
+            # Handle reasoning output
+            if (reasoning or content) and tool_calls:
+                if config.show_thinking and reasoning:
+                    for line in reasoning.split('\n'):
+                        if line.strip():
+                            self._stream_output(f"{line}\n", "thinking")
+                    self._stream_output("\n", "thinking")
+                # Display content that accompanies tool calls
+                if content:
+                    self._stream_output(content + "\n", "answer")
+                assistant_msg = {
+                    "role": "assistant", "content": content,
+                    "tool_calls": [{
+                        "id": tc["id"], "type": "function",
+                        "function": {"name": tc["name"], "arguments": tc["arguments"]}
+                    } for tc in tool_calls]
+                }
+                assistant_msg["reasoning_content"] = reasoning
+                messages.append(assistant_msg)
+                self._last_reasoning = reasoning
+            elif tool_calls:
+                # Display content that accompanies tool calls
+                if content:
+                    self._stream_output(content + "\n", "answer")
+                messages.append({
+                    "role": "assistant", "content": content,
+                    "reasoning_content": reasoning or "",
+                    "tool_calls": [{
+                        "id": tc["id"], "type": "function",
+                        "function": {"name": tc["name"], "arguments": tc["arguments"]}
+                    } for tc in tool_calls]
+                })
+
+            # needsFollowUp: no tool calls = final response
+            if not tool_calls:
+                try:
+                    final_response, final_reasoning, usage, fr = self.llm.chat(
+                        messages, tools=tools, stream=True,
+                        callback=wrap_callback, usage_callback=usage_callback
+                    )
+                except AgentCancelledError:
+                    raise
+                except Exception as e:
+                    logger.error(f"Streaming chat failed: {e}", exc_info=True)
+                    self._stream_output(f"\n[Error]: LLM streaming failed: {type(e).__name__}: {str(e)[:200]}\n")
+                    break
+                # Max output tokens recovery
+                if fr == "length":
+                    messages.append(create_assistant_message(final_response))
+                    messages.append(create_user_message(config.max_tokens_recovery_prompt))
+                    self._stream_output("\n[输出截断 — 继续...]\n", "compact")
+                    thinking_started[0] = False
+                    continue
+                break
+
+            # Execute tool calls - concurrent for read-only, serial for write tools
+            # First, parse and validate all arguments
+            parsed_calls = []
+            for tc in tool_calls:
+                tool_name = tc["name"]
+                try:
+                    args_raw = tc["arguments"]
+                    if isinstance(args_raw, str):
+                        arguments = json.loads(args_raw) if args_raw.strip() else {}
+                    else:
+                        arguments = args_raw if args_raw else {}
+                except (json.JSONDecodeError, TypeError) as e:
+                    logger.warning(f"Failed to parse tool arguments for {tool_name}: {e}")
+                    self._stream_output(f"[Error]: Invalid arguments for {tool_name}: {e}\n")
+                    messages.append(create_tool_result_message(tc["id"], f"Error: Invalid JSON arguments: {e}"))
+                    continue
+
+                # Schema validation
+                tool = registry.get(tool_name)
+                if tool:
+                    validation_errors = tool.validate_args(arguments)
+                    if validation_errors:
+                        err_msg = f"Schema validation failed: {'; '.join(validation_errors)}"
+                        self._stream_output(f"[Error]: {err_msg}\n")
+                        messages.append(create_tool_result_message(tc["id"], f"Error: {err_msg}"))
+                        continue
+
+                parsed_calls.append((tc, tool_name, arguments))
+
+            # Separate into concurrent-safe and serial batches
+            concurrent_batch = [(tc, name, args) for tc, name, args in parsed_calls if name in CONCURRENT_SAFE_TOOLS]
+            serial_batch = [(tc, name, args) for tc, name, args in parsed_calls if name not in CONCURRENT_SAFE_TOOLS]
+
+            # Execute concurrent-safe tools in parallel
+            if concurrent_batch:
+                # First, send all calling messages in submission order
+                for tc, tool_name, arguments in concurrent_batch:
+                    self._stream_output(f"\n[Calling tool: {tool_name}]\n", "tool_call")
+
+                # Execute all tools in parallel
+                def _exec_one(tc_name_args):
+                    tc, tool_name, arguments = tc_name_args
+                    result = self._execute_tool_call(tool_name, arguments)
+                    self._compact_engine.increment_streak()
+                    return tc, result
+
+                # Collect results preserving submission order
+                ordered_results = []
+                with ThreadPoolExecutor(max_workers=min(len(concurrent_batch), MAX_CONCURRENT_TOOLS)) as pool:
+                    futures = [pool.submit(_exec_one, item) for item in concurrent_batch]
+                    for future in futures:
+                        ordered_results.append(future.result())
+
+                # Output results in submission order
+                for tc, result in ordered_results:
+                    messages.append(create_tool_result_message(tc["id"], result.get("content", "")))
+                    if result.get("success"):
+                        self._stream_output(f"[Result]:\n{result.get('content', '')[:TRUNCATE_CONTENT_LENGTH]}\n", "tool_result")
+                    else:
+                        self._stream_output(f"[Error]: {result.get('error') or 'Unknown error'}\n", "tool_result")
+
+            # Execute write tools serially
+            for tc, tool_name, arguments in serial_batch:
+                self._stream_output(f"\n[Calling tool: {tool_name}]\n", "tool_call")
+                result = self._execute_tool_call(tool_name, arguments)
+                self._compact_engine.increment_streak()
+                messages.append(create_tool_result_message(tc["id"], result.get("content", "")))
+                if result.get("success"):
+                    self._stream_output(f"[Result]:\n{result.get('content', '')[:TRUNCATE_CONTENT_LENGTH]}\n", "tool_result")
+                else:
+                    self._stream_output(f"[Error]: {result.get('error') or 'Unknown error'}\n", "tool_result")
+
+            # Stop hook check: run registered hooks, inject blocking errors
+            blocking_error = self._run_stop_hooks(messages, tool_calls)
+            if blocking_error:
+                messages.append(create_user_message(blocking_error))
+                self._stream_output(f"\n[Stop hook: {blocking_error[:200]}]\n", "compact")
+
+            # In-loop compression check
+            current_tokens = self._calculate_context_tokens(messages)
+            should_compact, level = self._compact_engine.should_compact(
+                current_tokens, config.effective_context_window
+            )
+            if should_compact:
+                result = self._compact_engine.compact(level, self.llm)
+                if result["compacted"]:
+                    self._stream_output(
+                        f"\n[上下文压缩: L{level} • 节省 ~{result['tokens_saved']} tokens]\n",
+                        "compact"
+                    )
+                    messages = [create_system_message(config.get_system_prompt())]
+                    messages.extend(memory.get_conversation_for_llm())
+                    messages.append(create_user_message(config.compact_resume_prompt))
+                    messages.append(create_user_message(project_context))
+                    current_tokens = self._calculate_context_tokens(messages)
+
+            self._stream_output(f"{current_tokens / config.effective_context_window if config.effective_context_window > 0 else 0:.2f}", "context_usage")
+
+            # Token budget nudge: inject message to keep AI working
+            usage_ratio = current_tokens / config.effective_context_window if config.effective_context_window > 0 else 0
+            if usage_ratio >= config.nudge_threshold:
+                nudge_msg = config.nudge_prompt.replace("{pct:.0%}", f"{usage_ratio:.0%}")
+                messages.append(create_user_message(nudge_msg))
+                logger.info(f"Token nudge injected: usage={usage_ratio:.0%} threshold={config.nudge_threshold:.0%}")
+                self._stream_output(f"\n[Token 预算警告: {usage_ratio:.0%} — 注入 nudge 消息]\n", "compact")
+
+        # Save assistant response to memory
         memory.add_message("assistant", final_response)
 
-        # 计算token消耗并显示
-        # 各部分 token
+        # Token display
         system_tokens = count_tokens(config.get_system_prompt())
         memory_tokens = sum(count_tokens(msg.get("content", "")) for msg in memory.get_conversation_for_llm())
         input_tokens = count_tokens(user_input)
         reasoning_tokens = count_tokens(final_reasoning) if final_reasoning else 0
         output_tokens = count_tokens(final_response)
-
-        # 本次总消耗
         total_this = system_tokens + memory_tokens + input_tokens + reasoning_tokens + output_tokens
         self.total_tokens += total_this
 
-        # 格式化显示
         def fmt_token(t):
             if t >= 1000:
                 return f"{t/1000:.3f}K"
             return f"{t:.0f}"
 
-        self._stream_output(f"⬆{fmt_token(system_tokens + memory_tokens + input_tokens)} ⬇{fmt_token(reasoning_tokens + output_tokens)} ∫{fmt_token(self.total_tokens)}", "token_info")
+        self._stream_output(
+            f"⬆{fmt_token(system_tokens + memory_tokens + input_tokens)} "
+            f"⬇{fmt_token(reasoning_tokens + output_tokens)} "
+            f"∫{fmt_token(self.total_tokens)}",
+            "token_info"
+        )
 
         return final_response
 
+    def start_autonomous_loop(self) -> None:
+        """Start autonomous loop in a separate daemon thread."""
+        if self._autonomous_running:
+            return
+        self._autonomous_mode = True
+        threading.Thread(target=self._autonomous_loop, daemon=True).start()
+
+    def _autonomous_loop(self) -> None:
+        """Persistent loop for autonomous mode. Runs until stop_event is set."""
+        self._autonomous_running = True
+        self._stream_output("\n[自主模式已激活 — 等待任务...]\n", "compact")
+        logger.info("Autonomous mode activated")
+
+        try:
+            while not (self.stop_event and self.stop_event.is_set()):
+                got_event = self._work_event.wait(timeout=1.0)
+                if got_event:
+                    self._work_event.clear()
+
+                while True:
+                    with self._pending_lock:
+                        if not self._pending_inputs:
+                            break
+                        item = self._pending_inputs.popleft()
+
+                    source = item["source"]
+                    text = item["text"]
+                    is_tick = (text == "<tick>")
+
+                    # First tick: greet user
+                    if is_tick and self._first_tick:
+                        self._first_tick = False
+                        self._stream_output("\n[自主模式就绪 — 有什么需要我帮忙的吗？]\n", "autonomous")
+                        continue
+
+                    self._stream_output(f"\n{'='*40}\n[任务来源: {source}]\n", "user_input")
+                    logger.info(f"Processing autonomous task: source={source}")
+
+                    self._is_sleeping = False
+                    try:
+                        with self._run_lock:
+                            self._run_inner(text)
+                    except AgentCancelledError:
+                        self._stream_output("\n[任务已取消]\n", force=True)
+                        return
+                    except Exception as e:
+                        error_type = classify_error(e)
+                        error_config = get_error_config(error_type)
+                        retry_count = item.get("retry_count", 0)
+                        max_retries = error_config.get("max_retries", 0)
+
+                        # 判断是否应该重试
+                        if max_retries > 0 and retry_count < max_retries:
+                            # 可重试错误：重新入队，等待后重试
+                            new_retry_count = retry_count + 1
+                            wait_time = get_retry_interval(error_type, new_retry_count)
+
+                            error_msg = get_error_message(error_type, e, new_retry_count, max_retries)
+                            self._stream_output(f"\n{error_msg}\n", "error")
+                            logger.warning(f"Retryable error: {error_type}, retry {new_retry_count}/{max_retries}")
+
+                            time.sleep(wait_time)
+                            with self._pending_lock:
+                                self._pending_inputs.append({"text": text, "source": source, "retry_count": new_retry_count})
+                            self._work_event.set()
+                        else:
+                            # 不可重试错误或达到最大重试次数
+                            error_msg = get_error_message(error_type, e)
+                            if max_retries > 0 and retry_count >= max_retries:
+                                error_msg += f"\n已达到最大重试次数 ({max_retries})"
+                            self._stream_output(f"\n{error_msg}\n", "error", force=True)
+                            logger.error(f"Task failed: {error_type}: {e}", exc_info=True)
+                            time.sleep(1)
+                    finally:
+                        if self.output_callback and self.get_pending_count() == 0:
+                            self.output_callback("_autonomous_done", "")
+
+                if self.stop_event and self.stop_event.is_set():
+                    break
+        finally:
+            self._autonomous_running = False
+            self._autonomous_mode = False
+            self._is_sleeping = False
+            self._stream_output("\n[自主模式已退出]\n", "compact", force=True)
+            logger.info("Autonomous mode deactivated")
+            if self.output_callback:
+                self.output_callback("_agent_done", "")
+
     def reset(self) -> None:
         """Reset agent state"""
+        logger.info("Agent state reset")
         memory.clear()
         self._last_reasoning = ""
+        self._autonomous_mode = False
+        self._autonomous_running = False
+        self._is_sleeping = False
+        self._first_tick = True
+        with self._pending_lock:
+            self._pending_inputs.clear()
+        self._compact_engine = CompactEngine(memory)

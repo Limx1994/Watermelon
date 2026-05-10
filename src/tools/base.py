@@ -1,7 +1,7 @@
 """Base class for all tools"""
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 class ToolResult:
@@ -15,7 +15,7 @@ class ToolResult:
         metadata: Optional[Dict[str, Any]] = None
     ):
         self.success = success
-        self.content = content
+        self.content = content or ""
         self.error = error
         self.metadata = metadata or {}
 
@@ -49,6 +49,37 @@ class BaseTool(ABC):
     def get_schema(self) -> Dict[str, Any]:
         """Get the JSON schema for this tool's parameters"""
         pass
+
+    def validate_args(self, args: Dict[str, Any]) -> List[str]:
+        """Validate arguments against the tool's schema.
+
+        Returns a list of error messages (empty = valid).
+        Only checks required fields and basic type matching.
+        """
+        schema = self.get_schema()
+        if not schema or schema.get("type") != "object":
+            return []
+
+        errors: List[str] = []
+        properties = schema.get("properties", {})
+        required = schema.get("required", [])
+
+        # Check required fields
+        for field in required:
+            if field not in args:
+                errors.append(f"Missing required parameter: {field}")
+
+        # Basic type checking
+        type_map = {"string": str, "number": (int, float), "integer": int, "boolean": bool, "array": list, "object": dict}
+        for field, value in args.items():
+            if field in properties:
+                expected_type = properties[field].get("type")
+                if expected_type and expected_type in type_map:
+                    py_type = type_map[expected_type]
+                    if not isinstance(value, py_type):
+                        errors.append(f"Parameter '{field}' should be {expected_type}, got {type(value).__name__}")
+
+        return errors
 
     def get_definition(self) -> Dict[str, Any]:
         """Get the full tool definition for LLM function calling"""

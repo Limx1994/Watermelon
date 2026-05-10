@@ -160,6 +160,69 @@ def is_complex_script(command: str) -> Tuple[bool, str]:
     return False, ""
 
 
+def convert_operators(command: str) -> str:
+    """
+    Convert && and || to PowerShell 5.1 compatible syntax.
+
+    PowerShell 5.1 does not support && / || as pipeline chain operators.
+    This converts them to native if-condition syntax.
+
+    Uses a state machine to skip && / || inside quoted strings.
+    """
+    if "&&" not in command and "||" not in command:
+        return command
+
+    # State machine: split on && / || while skipping quoted regions
+    segments: list = []
+    current: list = []
+    i = 0
+    in_single = False
+    in_double = False
+
+    while i < len(command):
+        ch = command[i]
+        if ch == "'" and not in_double:
+            in_single = not in_single
+            current.append(ch)
+        elif ch == '"' and not in_single:
+            in_double = not in_double
+            current.append(ch)
+        elif not in_single and not in_double:
+            if command[i:].startswith("&&"):
+                segments.append("".join(current))
+                segments.append("&&")
+                current = []
+                i += 2
+                continue
+            elif command[i:].startswith("||"):
+                segments.append("".join(current))
+                segments.append("||")
+                current = []
+                i += 2
+                continue
+        current.append(ch)
+        i += 1
+
+    segments.append("".join(current))
+
+    if len(segments) < 3:
+        return command
+
+    # Build result using $Error.Count for robust error detection
+    result = f"$__ec0=$Error.Count; {segments[0].strip()}"
+    idx = 1
+    while idx < len(segments) - 1:
+        op = segments[idx].strip()
+        nxt = segments[idx + 1].strip()
+        if op == "&&":
+            result += f'; if($Error.Count -eq $__ec0) {{ $__ec0=$Error.Count; {nxt} }}'
+        elif op == "||":
+            result += f'; if($Error.Count -ne $__ec0) {{ $__ec0=$Error.Count; {nxt} }}'
+        idx += 2
+
+    return result
+
+
 def resolve_alias_with_detection(command: str) -> Tuple[str, bool]:
     """
     Resolve aliases and detect if script is complex.
@@ -168,5 +231,9 @@ def resolve_alias_with_detection(command: str) -> Tuple[str, bool]:
         Tuple of (resolved_command, needs_ps1_file)
     """
     resolved = resolve_alias(command)
+    # Detect complexity BEFORE converting operators
+    # (convert_operators always adds semicolons, which would false-positive)
     is_complex, _ = is_complex_script(resolved)
+    # Convert && / || — the generated if/else is valid -Command input
+    resolved = convert_operators(resolved)
     return resolved, is_complex

@@ -1,6 +1,9 @@
 import json
+import logging
 import re
 from typing import Any, Dict, List
+
+logger = logging.getLogger(__name__)
 
 # 模块级预编译正则，避免重复编译开销
 _CHINESE_RE = re.compile(r'[一-龥]')
@@ -20,7 +23,8 @@ def _get_encoder():
             import tiktoken
             _ENCODER = tiktoken.get_encoding("cl100k_base")
         except ImportError:
-            _ENCODER = False  # 标记为不可用
+            _ENCODER = False
+            logger.debug("tiktoken unavailable, using estimation fallback")
     return _ENCODER
 
 

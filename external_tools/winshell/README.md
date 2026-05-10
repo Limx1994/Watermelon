@@ -111,7 +111,10 @@ external_tools\winshell\dist\winshell.exe --command <command> [--timeout <ms>] [
 3. **子表达式**：`$(...)` 语法
 4. **脚本块**：`& {...}` 语法
 5. **多语句**：`;` 分隔的多个语句
-6. **命令链**：`&&` 或 `||` 操作符
+
+注意：`&&` 和 `||` 操作符会被 `convert_operators` 转换为 PowerShell 5.1 兼容的 `if/else` 语法（如 `cmd1; if($?) { cmd2 }`），转换后的代码是合法的 `-Command` 输入，不会自动使用 .ps1 文件。
+
+`convert_operators` 使用状态机跳过引号内的 `&&`/`||`，确保 `python -c "a && b" && echo task2` 这类包含引号的命令能正确分割。
 
 ### 示例
 
@@ -153,7 +156,8 @@ winshell.exe --command "Start-Sleep 60" --run-in-background true
 ## 安全特性
 
 - **别名规范化**：所有别名在执行前规范化为 canonical cmdlet 名称
-- **.ps1 文件执行**：复杂脚本避免直接在 `-Command` 中执行，防止变量解析问题
+- **引号感知操作符转换**：`convert_operators` 使用状态机跳过引号内的 `&&`/`||`，避免错误分割
+- **.ps1 文件执行**：复杂脚本（变量引用、子表达式等）避免直接在 `-Command` 中执行，防止变量解析问题
 - **超时保护**：防止命令无限挂起
 - **UTF-8 编码**：正确处理所有 Unicode 字符
 

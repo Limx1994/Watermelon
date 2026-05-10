@@ -1,7 +1,6 @@
 """Logging system initialization for AGImyCLI"""
 
 import logging
-import sys
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
 
@@ -42,8 +41,10 @@ def setup_logging() -> None:
 
     Configures:
     - RotatingFileHandler for file output with automatic rotation
-    - StreamHandler for console output (WARNING+ only)
     - Consistent format across all modules
+
+    NOTE: No console handler — prompt_toolkit full-screen TUI is incompatible
+    with raw stderr writes. All user-visible output flows through the TUI.
     """
     level = _get_log_level()
     max_bytes = config.logs_max_bytes
@@ -63,22 +64,16 @@ def setup_logging() -> None:
     file_handler.setLevel(level)
     file_handler.setFormatter(logging.Formatter(DEFAULT_FORMAT, DEFAULT_DATE_FORMAT))
 
-    console_handler = logging.StreamHandler(sys.stderr)
-    console_handler.setLevel(logging.WARNING)
-    console_handler.setFormatter(logging.Formatter(DEFAULT_FORMAT, DEFAULT_DATE_FORMAT))
+    # No console_handler: prompt_toolkit full-screen TUI is incompatible with
+    # raw stderr writes. All user-visible output flows through the TUI's
+    # _output_queue. File logging preserves all diagnostic information.
 
     root_logger = logging.getLogger()
     root_logger.setLevel(level)
     root_logger.addHandler(file_handler)
-    root_logger.addHandler(console_handler)
 
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("requests").setLevel(logging.WARNING)
     logging.getLogger("charset_normalizer").setLevel(logging.WARNING)
 
     root_logger.info(f"Logging initialized: level={config.logs_level}, file={resolved_log_file}")
-
-
-def get_logger(name: str) -> logging.Logger:
-    """Get a logger instance for the given name."""
-    return logging.getLogger(name)

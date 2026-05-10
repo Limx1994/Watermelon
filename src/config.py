@@ -6,7 +6,7 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .utils.path import resolve_path, get_project_root
+from .utils.path import resolve_path
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,11 @@ class Config:
         except json.JSONDecodeError as e:
             logger.warning(f"config.json parse error: {e}, using defaults")
             self._config = {}
+        else:
+            model = self._config.get("openai", {}).get("model", "?")
+            base_url = self._config.get("openai", {}).get("base_url", "?")
+            ctx = self._config.get("openai", {}).get("context_window", "?")
+            logger.info(f"Config loaded: model={model} base_url={base_url} context_window={ctx}")
 
     def _load_mcp_config(self) -> None:
         """Load MCP configuration from mcp.json
@@ -49,7 +54,7 @@ class Config:
         2. {"mcpServers": {"name": {...}}} - standard MCP config format
         """
         try:
-            mcp_config_path = resolve_path("mcp.json")
+            mcp_config_path = resolve_path("config/mcp.json")
             with open(mcp_config_path, "r", encoding="utf-8") as f:
                 raw_config = json.load(f)
 
@@ -71,14 +76,18 @@ class Config:
             else:
                 self._mcp_config = raw_config
         except FileNotFoundError:
+            logger.debug("mcp.json not found, using defaults")
             self._mcp_config = {}
         except Exception as e:
+            logger.warning(f"MCP config load failed: {e}")
             self._mcp_config = {}
 
     def reload(self) -> None:
         """Reload configuration from file"""
         self._load_config()
         self._load_mcp_config()
+        self._system_prompt_cache = None
+        logger.info(f"Configuration reloaded: model={self.model} context_window={self.context_window}")
 
     # OpenAI / LLM Configuration
     @property
@@ -92,6 +101,26 @@ class Config:
     @property
     def model(self) -> str:
         return self._config.get("openai", {}).get("model", "deepseek-v4-flash")
+
+    @property
+    def fallback_config(self) -> Optional[Dict[str, str]]:
+        """Fallback model config for cross-provider degradation.
+
+        Returns dict with model/base_url/api_key if fully configured, None otherwise.
+        Supports legacy empty string format (returns None = disabled).
+        """
+        fb = self._config.get("openai", {}).get("fallback_model", "")
+        if not fb:
+            return None
+        if isinstance(fb, str):
+            return None
+        if not fb.get("model") or not fb.get("base_url") or not fb.get("api_key"):
+            return None
+        return {
+            "model": fb["model"],
+            "base_url": fb["base_url"],
+            "api_key": fb["api_key"],
+        }
 
     @property
     def temperature(self) -> float:
@@ -108,7 +137,10 @@ class Config:
     @property
     def context_window(self) -> int:
         """context_window: 值 >= 1000 直接作为 token 数，值 < 1000 作为"K"单位（如 64 表示 64K = 64000）"""
-        value = self._config.get("openai", {}).get("context_window", 64)
+        try:
+            value = int(self._config.get("openai", {}).get("context_window", 64))
+        except (ValueError, TypeError):
+            value = 64
         if value >= 1000:
             return value
         return value * 1000
@@ -166,46 +198,36 @@ class Config:
     @property
     def compact_prompt_path(self) -> str:
         """压缩提示词文件路径"""
-        return self._config.get("compact", {}).get("prompt_path", "./compact_prompt.md")
+        return self._config.get("compact", {}).get("prompt_path", "./prompts/compact_prompt.md")
 
     def get_compact_prompt(self) -> str:
-        """读取压缩提示词模板，支持缓存"""
-        if not hasattr(self, "_compact_prompt_cache"):
-            self._compact_prompt_cache: Optional[str] = None
-        if self._compact_prompt_cache is None:
-            try:
-                path = resolve_path(self.compact_prompt_path.lstrip("./"))
-                self._compact_prompt_cache = path.read_text(encoding="utf-8")
-            except Exception:
-                self._compact_prompt_cache = self._default_compact_prompt()
-        return self._compact_prompt_cache
-
-    def _default_compact_prompt(self) -> str:
-        """默认压缩提示词（备用）"""
-        return """请为以下对话历史生成简洁摘要（500 tokens以内）：
-
-{messages}
-
-{requirements}
-
-摘要要求：
-- 提炼核心主题和任务
-- 保留重要决策和结论
-- 标注涉及的文件和工具
-"""
+        """Read compact prompt template from configured path, with caching."""
+        return self._load_prompt("compact_prompt",
+            "Please generate a concise summary for the following conversation:\n{messages}\n{requirements}")
 
     # Agent Configuration
     @property
     def max_turns(self) -> int:
-        return self._config.get("agent", {}).get("max_turns", 10)
+        return self._config.get("agent", {}).get("max_turns", 50)
 
     @property
     def max_retries(self) -> int:
         return self._config.get("agent", {}).get("max_retries", 3)
 
     @property
-    def memory_threshold(self) -> int:
-        return self._config.get("agent", {}).get("memory_threshold", 20)
+    def retry_interval_seconds(self) -> int:
+        """重试间隔秒数（默认60秒=1分钟）"""
+        return self._config.get("agent", {}).get("retry_interval_seconds", 60)
+
+    @property
+    def network_max_retries(self) -> int:
+        """网络错误最大重试次数（默认10次）"""
+        return self._config.get("agent", {}).get("network_max_retries", 10)
+
+    @property
+    def network_retry_interval_seconds(self) -> int:
+        """网络错误重试间隔秒数（默认30秒）"""
+        return self._config.get("agent", {}).get("network_retry_interval_seconds", 30)
 
     @property
     def thinking_enabled(self) -> bool:
@@ -223,24 +245,27 @@ class Config:
     # System Prompt
     @property
     def system_prompt_path(self) -> str:
-        return self._config.get("system_prompt", {}).get("path", "./systsc.md")
+        return self._config.get("system_prompt", {}).get("path", "./prompts/systsc.md")
 
     def get_system_prompt(self) -> str:
-        """Read system prompt from file with caching"""
+        """Read system prompt from file with caching. Appends autonomous instructions if enabled."""
         if not hasattr(self, "_system_prompt_cache"):
             self._system_prompt_cache: Optional[str] = None
         if self._system_prompt_cache is None:
             try:
-                path = resolve_path(self.system_prompt_path.lstrip("./"))
+                path = resolve_path(self.system_prompt_path.removeprefix("./"))
                 self._system_prompt_cache = path.read_text(encoding="utf-8")
             except Exception:
                 self._system_prompt_cache = "You are a helpful AI assistant."
-        return self._system_prompt_cache
+        logger.debug(f"System prompt loaded from {self.system_prompt_path}")
+        base = self._system_prompt_cache
+        base += "\n\n" + self.autonomous_instructions_prompt
+        return base
 
     # Tools Configuration
     @property
     def enabled_tools(self) -> List[str]:
-        return self._config.get("tools", {}).get("enabled", ["shell", "file", "grep", "glob"])
+        return self._config.get("tools", {}).get("enabled", ["read_file", "write_file", "shell", "grep", "glob", "edit"])
 
     # MCP Configuration (from mcp.json)
     @property
@@ -257,15 +282,6 @@ class Config:
             if server.get("name") == name:
                 return server
         return None
-
-    # Memory Configuration
-    @property
-    def memory_path(self) -> str:
-        return self._config.get("memory", {}).get("path", "./memory/conversation.json")
-
-    @property
-    def memory_auto_summary(self) -> bool:
-        return self._config.get("memory", {}).get("auto_summary", True)
 
     # Logs Configuration
     @property
@@ -285,6 +301,89 @@ class Config:
     def logs_backup_count(self) -> int:
         """Number of backup log files to keep (default: 5)."""
         return self._config.get("logs", {}).get("backup_count", 5)
+
+    # Prompt File Configuration
+    @property
+    def prompts_dir(self) -> dict:
+        return self._config.get("prompts", {})
+
+    def _load_prompt(self, key: str, default: str = "") -> str:
+        """Load a prompt from external .md file with caching."""
+        cache_key = f"_prompt_cache_{key}"
+        if not hasattr(self, cache_key):
+            setattr(self, cache_key, None)
+        cached = getattr(self, cache_key)
+        if cached is not None:
+            return cached
+
+        path_str = self.prompts_dir.get(key, "")
+        if not path_str:
+            setattr(self, cache_key, default)
+            return default
+        try:
+            path = resolve_path(path_str.removeprefix("./"))
+            content = path.read_text(encoding="utf-8").strip()
+            setattr(self, cache_key, content)
+            return content
+        except Exception:
+            logger.warning(f"Failed to load prompt {key} from {path_str}, using default")
+            setattr(self, cache_key, default)
+            return default
+
+    @property
+    def autonomous_instructions_prompt(self) -> str:
+        return self._load_prompt("autonomous_instructions",
+            "You are running in autonomous mode.")
+
+    @property
+    def compact_resume_prompt(self) -> str:
+        return self._load_prompt("compact_resume",
+            "Continue the conversation from where it left off.")
+
+    @property
+    def max_tokens_recovery_prompt(self) -> str:
+        return self._load_prompt("max_tokens_recovery",
+            "Output token limit hit. Resume directly.")
+
+    @property
+    def context_too_long_prompt(self) -> str:
+        return self._load_prompt("context_too_long",
+            "Context too long — compressing and retrying.")
+
+    @property
+    def summary_system_prompt(self) -> str:
+        return self._load_prompt("summary_system",
+            "You are a summary generation expert.")
+
+    def get_summary_template(self) -> str:
+        """Read summary template, with placeholder support."""
+        template = self._load_prompt("summary_template",
+            "Please generate a concise summary for the following conversation:\n{messages}\n{requirements}")
+        return template
+
+    # Autonomous Configuration
+    # Token Budget Nudge Configuration
+    @property
+    def nudge_threshold(self) -> float:
+        """Token usage ratio threshold to inject nudge message (default 0.90)"""
+        return self._config.get("agent", {}).get("nudge_threshold", 0.90)
+
+    @property
+    def nudge_prompt(self) -> str:
+        """Nudge message injected when token budget is near limit"""
+        return self._load_prompt("token_budget_nudge",
+            "Context at {pct:.0%}. Keep working — do not summarize.")
+
+    # Autonomous Configuration
+    @property
+    def cron_tasks(self) -> list:
+        """Cron task definitions for autonomous mode"""
+        return self._config.get("autonomous", {}).get("cron_tasks", [])
+
+    @property
+    def tick_interval_minutes(self) -> int:
+        """Tick interval in minutes for proactive wake-up (default 10)"""
+        return self._config.get("autonomous", {}).get("tick_interval_minutes", 10)
 
 
 # Global config instance

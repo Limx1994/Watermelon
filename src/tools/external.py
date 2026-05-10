@@ -3,10 +3,12 @@
 import json
 import logging
 import subprocess
+import time
 from pathlib import Path
 from typing import Any, Dict
 
 from .base import BaseTool, ToolResult
+from ..utils.path import get_project_root
 
 logger = logging.getLogger(__name__)
 
@@ -24,30 +26,20 @@ class ExternalTool(BaseTool):
         super().__init__(name, description)
         self.command = command
         self.schema = schema
-        self._project_root = self._find_project_root()
-
-    def _find_project_root(self) -> Path:
-        """Find the project root directory"""
-        current = Path(__file__).resolve().parent
-        while current != current.parent:
-            if (current / "config.json").exists():
-                return current
-            current = current.parent
-        return Path.cwd()
+        self._project_root = get_project_root()
 
     def _is_absolute_path(self, path: str) -> bool:
-        """Check if path is absolute"""
+        """Check if path is absolute (Windows: C:\\, UNC; Unix: /)"""
         if not path:
             return False
-        # Windows: C:\, D:\ etc. or UNC \\server\share
-        # Unix: / (root)
-        return Path(path).is_absolute() or (
-            len(path) >= 2 and path[1] == ':'
-        ) or path.startswith('\\\\')
+        try:
+            return Path(path).is_absolute()
+        except (ValueError, OSError):
+            return False
 
     def execute(self, **kwargs) -> ToolResult:
         """Execute the external CLI program"""
-        logger.info(f"Executing external tool: {self.name}")
+        logger.info(f"[tool:{self.name}] start | args={list(kwargs.keys())}")
         try:
             # Determine if command is relative or absolute
             cmd_str = self.command
@@ -55,37 +47,71 @@ class ExternalTool(BaseTool):
                 # Relative path: join with project root
                 cmd_str = str(self._project_root / cmd_str)
 
+            logger.info(f"[tool:{self.name}] exe={cmd_str}")
+
             # Build command with arguments
-            cmd_parts = cmd_str.split()
+            # Use executable path directly (never shlex.split it — breaks paths with spaces)
+            cmd_parts = [cmd_str]
             for key, value in kwargs.items():
                 # Convert underscores to hyphens for CLI args
                 arg_name = f"--{key.replace('_', '-')}"
-                cmd_parts.extend([arg_name, str(value)])
+                # Handle boolean flags: True = pass flag only, False = skip
+                if isinstance(value, bool):
+                    if value:
+                        cmd_parts.append(arg_name)
+                else:
+                    cmd_parts.extend([arg_name, str(value)])
 
-            logger.debug(f"Running: {' '.join(cmd_parts)}")
+            logger.debug(f"[tool:{self.name}] cmd_parts={cmd_parts}")
+            t0 = time.monotonic()
+            _user_timeout = kwargs.get("timeout")
+            _sub_timeout = max(10, int(_user_timeout) // 1000 + 10) if _user_timeout else 70
             result = subprocess.run(
                 cmd_parts,
                 capture_output=True,
                 text=True,
-                cwd=str(self._project_root)
+                encoding="utf-8",
+                errors="replace",
+                cwd=str(self._project_root),
+                timeout=_sub_timeout
             )
+            elapsed = time.monotonic() - t0
+            _stdout = result.stdout or ""
+            _stderr = result.stderr or ""
+            logger.info(f"[tool:{self.name}] exit={result.returncode} | {elapsed:.2f}s | stdout={len(_stdout)}B stderr={len(_stderr)}B")
 
             if result.stdout:
                 try:
                     data = json.loads(result.stdout)
-                    success = data.get("success", False)
+                    success = data.get("success")
+                    if success is None:
+                        # 兼容旧版输出：无 success 字段时根据 exit code 推断
+                        success = result.returncode == 0
+
+                    # 对于 winshell 类工具：检查 stderr 字段，非空则视为错误
+                    stderr_content = data.get("stderr", "")
+                    if stderr_content and success:
+                        # stderr 有内容但 success=true — 修正为失败
+                        success = False
+                        logger.warning(f"[tool:{self.name}] stderr detected | stderr={stderr_content[:300]}")
+
                     if not success:
-                        logger.warning(f"External tool {self.name} returned success=false")
+                        logger.warning(f"[tool:{self.name}] success=false | error={data.get('error', '')[:300]} stderr={stderr_content[:300]}")
 
                     # Extract content - for read_file, content is the primary field
                     # but for image/pdf/notebook, data may be in other fields
-                    content = data.get("content", "")
+                    content = data.get("content") or ""
                     if not content:
                         # For image/pdf/notebook, serialize the relevant data
                         if 'base64' in data:
                             content = json.dumps({"type": data.get("type", "unknown"), "base64": data["base64"], "filePath": data.get("filePath", "")})
                         elif 'cells' in data:
                             content = json.dumps({"type": "notebook", "cells": data["cells"], "filePath": data.get("filePath", "")})
+                        elif 'stdout' in data:
+                            content = data['stdout'] or ""
+
+                    # 错误信息优先级：error > stderr
+                    error_msg = data.get("error") or (stderr_content if stderr_content else None)
 
                     # Build metadata excluding reserved fields and nested metadata
                     metadata = {}
@@ -93,14 +119,20 @@ class ExternalTool(BaseTool):
                         if k not in ("success", "content", "error", "metadata"):
                             metadata[k] = v
 
+                    # 确保 returnCode 在 metadata 中（对 shell 工具有用）
+                    if "returnCode" in data and "returnCode" not in metadata:
+                        metadata["returnCode"] = data["returnCode"]
+
+                    logger.info(f"[tool:{self.name}] ok | content={len(content)}B"
+                                f"{' error=' + error_msg[:100] if error_msg else ''}")
                     return ToolResult(
                         success=success,
                         content=content,
-                        error=data.get("error"),
+                        error=error_msg,
                         metadata=metadata
                     )
                 except json.JSONDecodeError:
-                    logger.error(f"External tool {self.name} returned invalid JSON")
+                    logger.error(f"[tool:{self.name}] invalid JSON | stdout={result.stdout[:300]}")
                     return ToolResult(
                         success=False,
                         content="",
@@ -108,14 +140,14 @@ class ExternalTool(BaseTool):
                     )
 
             if result.stderr:
-                logger.warning(f"External tool {self.name} stderr: {result.stderr[:200]}")
+                logger.warning(f"[tool:{self.name}] stderr={result.stderr[:500]}")
                 return ToolResult(
                     success=False,
                     content="",
                     error=result.stderr
                 )
 
-            logger.warning(f"External tool {self.name} produced no output")
+            logger.warning(f"[tool:{self.name}] no output")
             return ToolResult(
                 success=False,
                 content="",
@@ -123,7 +155,7 @@ class ExternalTool(BaseTool):
             )
 
         except Exception as e:
-            logger.error(f"External tool {self.name} failed: {e}")
+            logger.error(f"[tool:{self.name}] exception: {type(e).__name__}: {e}")
             return ToolResult(
                 success=False,
                 content="",

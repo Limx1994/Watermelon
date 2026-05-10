@@ -25,10 +25,19 @@ AGImyCLI/
 │   │   ├── base.py          # 工具基类（BaseTool 抽象类，ToolResult）
 │   │   ├── registry.py      # 工具注册表（ToolRegistry 单例）
 │   │   ├── loader.py        # 外部工具加载器（load_external_tools）
-│   │   └── external.py      # ExternalTool 执行器
+│   │   ├── external.py      # ExternalTool 执行器
+│   │   └── sleep.py         # Sleep 工具（自主模式空闲等待）
+│   ├── commands/
+│   │   ├── __init__.py      # 包初始化
+│   │   ├── registry.py      # 斜杠命令注册表（CommandRegistry，SlashCommand）
+│   │   ├── core.py          # 内置斜杠命令（/help，/model，/save 等）
+│   │   └── completer.py     # 斜杠命令 Tab 补全（SlashCommandCompleter）
+│   ├── cron/
+│   │   └── scheduler.py     # Cron 调度器（CronScheduler，CronTask）
 │   ├── mcp/
 │   │   ├── base.py          # 抽象 MCP 客户端基类（BaseMCPClient）
 │   │   ├── protocol.py      # JSON-RPC 2.0 协议（MCPProtocol，MCPError）
+│   │   ├── client.py        # MCP 客户端工厂（create_mcp_client）
 │   │   ├── server.py        # MCP 服务器（MCPServer）
 │   │   ├── manager.py       # MCP 客户端管理器（MCPManager）
 │   │   ├── index.py         # 工具索引（ToolIndex）
@@ -43,18 +52,28 @@ AGImyCLI/
 ├── external_tools/           # 外部编译的 .exe 工具
 │   ├── read_file/           # 文件读取工具
 │   ├── write_file/          # 文件写入工具
-│   ├── winshell/            # Shell 执行器（带白名单验证）
+│   ├── winshell/            # Shell 执行器（别名解析）
 │   ├── grep/                # 内容搜索工具
 │   ├── glob/                 # 文件模式匹配工具
 │   └── edit/                 # 字符串替换工具
-├── manual/                  # 参考手册
 ├── memory/                  # 记忆存储
 ├── logs/                    # 日志文件
+├── prompts/                 # 提示词模板
+│   ├── systsc.md                # 系统提示词
+│   ├── compact_prompt.md        # 压缩提示词模板
+│   ├── autonomous_instructions.md  # 自主模式行为指令
+│   ├── compact_resume.md           # 压缩后续接
+│   ├── max_tokens_recovery.md      # 输出截断恢复
+│   ├── context_too_long.md         # 上下文过长恢复
+│   ├── token_budget_nudge.md       # Token 预算警告
+│   ├── summary_system.md           # 摘要生成系统提示
+│   └── summary_template.md         # 摘要模板
+├── config/                  # 配置文件
+│   ├── mcp.json                 # MCP 服务器配置
+│   ├── tools.json               # 工具定义
+│   └── scheduled_tasks.json     # Cron 任务状态（自动生成）
 ├── config.json              # 应用配置
-├── mcp.json                 # MCP 服务器配置
-├── tools.json                # 工具定义
-├── systsc.md                # 系统提示词
-├── compact_prompt.md        # 压缩提示词模板
+├── LICENSE                  # 许可证文件
 └── requirements.txt         # 依赖
 ```
 
@@ -67,30 +86,45 @@ AGImyCLI/
 | `openai` | `api_key` | API 密钥 | - |
 | | `base_url` | API 地址 | `https://api.deepseek.com` |
 | | `model` | 模型名称 | `deepseek-v4-flash` |
+| | `fallback_model` | 跨提供商降级配置（空 = 禁用）。对象格式：`{"model": "gpt-4o", "base_url": "...", "api_key": "..."}` — 三字段必填 | `""` |
 | | `temperature` | 采样温度 | `0.7` |
 | | `top_p` | 核采样参数 | `0.7` |
 | | `reasoning_effort` | 思考深度 | `max` |
 | | `context_window` | 最大上下文窗口（单位为千，如 128 = 128K） | `128` |
 | | `max_output_tokens` | 最大输出 Token 数 | `20000` |
-| `agent` | `max_turns` | 最大对话轮次 | `10` |
+| `agent` | `max_turns` | 最大对话轮次 | `50` |
 | | `max_retries` | 失败最大重试次数 | `3` |
+| | `retry_interval_seconds` | 失败重试间隔（秒） | `60` |
+| | `network_max_retries` | 网络错误最大重试次数 | `10` |
+| | `network_retry_interval_seconds` | 网络错误重试间隔（秒） | `30` |
 | | `memory_threshold` | 触发自动摘要的轮次 | `20` |
 | | `thinking_enabled` | 启用思考模式 | `true` |
+| | `nudge_threshold` | Token 预算警告触发比例（0.0-1.0） | `0.90` |
 | `display` | `show_thinking` | 显示思考过程 | `true` |
 | | `thinking_indicator` | 思考指示器文字 | `思考中` |
-| `system_prompt` | `path` | 系统提示词文件路径 | `./systsc.md` |
+| `system_prompt` | `path` | 系统提示词文件路径 | `./prompts/systsc.md` |
 | `tools` | `enabled` | 启用的外部工具列表（在 tools.json 中配置） | `["shell", "read_file", "write_file", "grep", "glob", "edit"]` |
 | `memory` | `path` | 对话存储路径 | `./memory/conversation.json` |
 | | `auto_summary` | 长历史自动摘要 | `true` |
 | `logs` | `path` | 日志文件路径 | `./logs/agent.log` |
 | | `level` | 日志级别 | `INFO` |
+| | `max_bytes` | 单个日志文件最大字节数（轮转前） | `10485760`（10MB） |
+| | `backup_count` | 日志备份数量 | `5` |
+| `prompts` | `autonomous_instructions` | 自主模式指令文件路径 | `""` |
+| | `compact_resume` | 压缩恢复提示词路径 | `""` |
+| | `max_tokens_recovery` | 输出截断恢复提示词路径 | `""` |
+| | `context_too_long` | 上下文过长恢复提示词路径 | `""` |
+| | `token_budget_nudge` | Token 预算警告提示词路径 | `""` |
+| | `summary_system` | 摘要系统提示词路径 | `""` |
+| | `summary_template` | 摘要模板路径 | `""` |
+| | `compact_prompt` | 压缩提示词路径 | `""` |
 
 ### compact — 上下文压缩设置
 
 | 配置项 | 键 | 说明 | 默认值 |
 |--------|-----|------|--------|
 | `compact` | `enabled` | 启用上下文压缩 | `true` |
-| | `prompt_path` | 压缩提示词模板路径 | `./compact_prompt.md` |
+| | `prompt_path` | 压缩提示词模板路径 | `./prompts/compact_prompt.md` |
 | | `buffer_tokens` | 压缩后目标缓冲区大小 | `13000` |
 | | `micro_compact_streak` | 微型压缩触发连续数 | `3` |
 | | `micro_compact_gap_minutes` | 微型压缩时间间隔（分钟） | `5` |
@@ -98,7 +132,45 @@ AGImyCLI/
 | | `full_compact_threshold` | 完整压缩触发比例 | `0.95` |
 | | `preserve_recent_messages` | 保留的最近消息数 | `10` |
 
-### mcp.json — MCP 服务器配置
+### autonomous — 自主模式设置
+
+| 配置项 | 键 | 说明 | 默认值 |
+|--------|-----|------|--------|
+| `autonomous` | `tick_interval_minutes` | Tick 醒醒间隔（分钟） | `10` |
+| | `cron_tasks` | 定时任务定义列表 | `[]` |
+
+#### Cron 任务格式
+
+```json
+{
+  "name": "task-name",
+  "prompt": "AI 应该做什么",
+  "cron_expression": "*/5 * * * *",
+  "interval_minutes": 30,
+  "enabled": true
+}
+```
+
+- `cron_expression`：标准 5-field cron（via croniter）。优先于 `interval_minutes`。
+- `interval_minutes`：无 cron_expression 时的简单间隔回退。
+
+### prompts — 提示词模板系统
+
+`prompts` 配置段将逻辑名称映射到 `.md` 文件路径：
+
+| 模板 | 用途 |
+|------|------|
+| `autonomous_instructions` | 注入系统提示词，定义自主模式行为指令 |
+| `compact_resume` | 上下文压缩后发送，指示 AI 继续工作而非等待输入 |
+| `max_tokens_recovery` | 输出达到 token 上限时的恢复提示 |
+| `context_too_long` | 上下文窗口溢出时的恢复提示 |
+| `token_budget_nudge` | 上下文使用率过高时注入的警告（支持 `{pct:.0%}` 占位符） |
+| `summary_system` | 摘要生成的系统提示词 |
+| `summary_template` | 摘要生成模板（支持 `{messages}` 占位符） |
+
+`Config._load_prompt(key, default)` 从配置路径加载并缓存模板内容。路径为空或缺失时使用内置默认字符串。用户可通过编辑 `prompts/` 目录下的 `.md` 文件自定义所有行为。
+
+### config/mcp.json — MCP 服务器配置
 
 ```json
 {
@@ -118,7 +190,7 @@ AGImyCLI/
 
 ## 工具系统
 
-所有工具均为外部 .exe 程序，通过 `tools.json` 定义，由 `load_external_tools()` 加载。内置 Python 工具已全部移除。
+大部分工具为外部 .exe 程序，通过 `tools.json` 定义，由 `load_external_tools()` 加载。`sleep` 工具为内置 Python 工具，直接注册到 `ToolRegistry`，用于自主模式空闲等待。
 
 ### 外部工具 (external_tools/)
 
@@ -149,6 +221,8 @@ class BaseTool(ABC):
     @abstractmethod
     def get_schema() -> Dict[str, Any]
 
+    def validate_args(args: Dict[str, Any]) -> List[str]  # 返回错误列表（空 = 有效）
+
     def get_definition() -> Dict[str, Any]  # 返回 LLM 函数调用格式
 ```
 
@@ -162,7 +236,7 @@ class BaseTool(ABC):
 - `get_all_definitions()` - 获取所有工具定义
 - `execute_tool(name, **kwargs)` - 执行工具
 
-### 外部工具 (external_tools/)
+### ExternalTool 执行器 (external.py)
 
 外部工具是编译后的 .exe 程序，通过 `ExternalTool` 类调用：
 
@@ -187,6 +261,8 @@ class ExternalTool:
 - **图片**：`{"success": true, "type": "image", "base64": "...", "dimensions": {"width": 800, "height": 600}}`
 - **PDF**：`{"success": true, "type": "pdf", "base64": "...", "totalPages": 10}`
 - **Notebook**：`{"success": true, "type": "notebook", "cells": [...]}`
+
+Stderr 检测：当工具返回 `success: true` 但 `stderr` 非空时，`ExternalTool` 将 `success` 覆写为 `false`（winshell 的 stderr = PowerShell 错误）。
 
 ### tools.json 格式
 
@@ -273,6 +349,34 @@ class ExternalTool:
 }
 ```
 
+### sleep 工具 Schema
+
+```json
+{
+  "function": {
+    "name": "sleep",
+    "description": "Pause autonomous operation when idle. Wait for new cron tasks or user input.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "duration_seconds": {
+          "type": "integer",
+          "description": "Maximum seconds to sleep (1-3600, default 300)",
+          "default": 300,
+          "minimum": 1,
+          "maximum": 3600
+        },
+        "reason": {
+          "type": "string",
+          "description": "Brief reason for sleeping (for logging)"
+        }
+      },
+      "required": []
+    }
+  }
+}
+```
+
 ## MCP 协议实现 (src/mcp/)
 
 ### 协议 (protocol.py)
@@ -283,11 +387,7 @@ JSON-RPC 2.0 协议工具：
 - `MCPProtocol.create_error()` - 创建错误响应
 
 错误码：
-- `PARSE_ERROR = -32700`
-- `INVALID_REQUEST = -32600`
 - `METHOD_NOT_FOUND = -32601`
-- `INVALID_PARAMS = -32602`
-- `INTERNAL_ERROR = -32603`
 
 方法：
 - `initialize` - 初始化连接
@@ -332,8 +432,10 @@ O(1) 工具名到客户端的查找：
 ## LLM 客户端 (src/llm/client.py)
 
 兼容 DeepSeek API 的客户端：
-- `chat()` - 发送聊天请求（支持流式）
+- `chat()` - 发送聊天请求，返回 `(response_content, reasoning_content, usage_dict, finish_reason)`（支持流式）
 - `get_tool_calls()` - 从响应中提取工具调用
+- `switch_model(model_name)` - 运行时切换模型（用于降级恢复）
+- `restore_model()` - 恢复原始模型
 
 消息创建辅助函数：
 - `create_system_message()` - 系统消息
@@ -343,6 +445,15 @@ O(1) 工具名到客户端的查找：
 
 工具加载：
 - `load_tools_from_json()` - 从 tools.json 加载工具
+
+## Agent (src/agent.py)
+
+核心 Agent 循环，协调 LLM 和工具交互：
+
+- **项目上下文注入**：`_build_project_context()` 将 CLAUDE.md 内容（前 3000 字符）、当前日期和 `git status --short` 输出作为 `<system-reminder>` 注入每次 LLM 调用
+- **连续错误追踪**：`MAX_CONSECUTIVE_ERRORS = 3` — 连续 3 次 API 错误后停止；上下文过长错误触发完整压缩；模型失败触发降级切换
+- **并发工具执行**：只读工具通过 `ThreadPoolExecutor` 并行执行；写入工具串行执行
+- **Stop hooks**：`register_stop_hook(callback)` — 每轮工具执行后运行回调；返回错误字符串时注入为用户消息强制 AI 继续
 
 ## 记忆系统 (src/memory.py)
 
@@ -365,12 +476,12 @@ O(1) 工具名到客户端的查找：
 - **Level 3 (Full)**：当使用率 >= 95% 时，保存会话并重置
 
 压缩行为可通过 `config.json` 的 `compact` 配置段调整。
-通过编辑 `compact_prompt.md` 自定义压缩摘要提示词。
+通过编辑 `prompts/compact_prompt.md` 自定义压缩摘要提示词。
 
 ## 关键设计决策
 
 1. **单一配置文件**：应用设置在 `config.json`
-2. **分离 MCP 配置**：服务器连接在 `mcp.json`
+2. **分离 MCP 配置**：服务器连接在 `config/mcp.json`
 3. **相对路径**：所有路径相对于项目根目录
 4. **本地工作**：仅在项目目录内工作
 5. **MCP 协议**：工具通过 JSON-RPC 2.0 暴露
@@ -379,6 +490,47 @@ O(1) 工具名到客户端的查找：
 8. **固定 Token 栏**：Token 统计固定在底栏右下角显示
 9. **鼠标事件屏蔽**：Agent 运行期间，`_OutputWindow.mouse_handler` 屏蔽输出窗口的全部鼠标事件，防止滚动/选中操作干扰流式输出
 10. **自定义滚动处理**：`_OutputWindow` 覆盖 `_scroll_up()`/`_scroll_down()`，无条件同步光标移动与 `vertical_scroll`（父类仅在光标触及视口边缘时才移动）。使用 `ScrollOffsets(top=0, bottom=0)` 实现精确的滚轮响应
+11. **并发工具执行**：只读工具（`read_file`、`grep`、`glob`、`sleep`）通过 `ThreadPoolExecutor` 并行执行；写入工具（`shell`、`write_file`、`edit`）串行执行
+12. **Token 预算警告**：当上下文使用率达到 `nudge_threshold`（默认 90%）时，注入 nudge 消息防止过早摘要
+13. **Stop hooks**：可注册回调（`register_stop_hook`），每轮工具执行后运行；返回错误字符串时注入为用户消息强制 AI 继续
+14. **模型降级**：主模型失败后自动切换到降级模型（通过 `fallback_config` 支持跨提供商切换），恢复后自动切回。两级机制：重试级（`_call_with_retry` 内）和循环级（Agent 继续使用降级模型）
+15. **Schema 验证**：工具参数在执行前通过 JSON schema 验证（必填字段、基本类型检查）
+16. **Tick 醒醒**：CronScheduler 定期发送 `<tick>` 提示保持自主 Agent 存活。首次 tick 问候用户；后续 tick 触发自主工作
+17. **Sleep 状态感知**：Sleep 工具激活时抑制 tick，但 cron 任务仍可唤醒 Agent
+18. **Proactive 指令**：自主模式向系统提示词注入行为指令（行动优先、首次问候、通过 Sleep 控制节奏）
+19. **标准 Cron 表达式**：CronScheduler 通过 `croniter` 支持 5-field cron，带抖动避免同时触发
+20. **自主模式压缩续接**：压缩后续接提示词包含自主模式感知 — AI 继续工作循环而非等待用户输入
+21. **斜杠命令系统**：`CommandRegistry` 单例管理 `SlashCommand` 数据类实例，每个命令通过 `handler(tui, args)` 回调执行。`SlashCommandCompleter` 通过 `DynamicCompleter` 在输入 `BufferControl` 中提供 Tab 补全。斜杠命令在 TUI 的 Enter 键处理器中拦截，即使 Agent 运行期间也可同步执行（通过 `enter_while_busy` 绑定）
+22. **引号感知操作符转换**：`convert_operators()` 使用状态机跳过引号内的 `&&`/`||`，生成的 `if/else` 块是合法的 PowerShell `-Command` 输入，不会强制使用 `.ps1` 执行
+23. **Stderr 成功覆写**：`ExternalTool` 在 `stderr` 非空时将 `success=true` 覆写为 `false`，确保 PowerShell 错误即使在进程退出码为 0 时也能正确报告
+24. **错误分类与自动恢复**：错误按类型分类（network、rate_limit、api_server、api_client、context、memory、disk、permission、mcp、tool、unknown），每种类型有特定恢复策略。可重试错误（network、rate_limit、api_server、api_timeout、context、memory、mcp）自动指数退避重试。不可重试错误（api_client、api_auth、api_permission、api_not_found、disk、permission、tool）立即报告。
+25. **网络状态监控**：CronScheduler 每 30 秒检查网络连通性。断网恢复后立即触发 tick 恢复自主操作，无需等待下一次计划 tick。
+26. **可配置重试参数**：重试行为通过 `config.json` 中的 `retry_interval_seconds`（默认 60s）、`network_max_retries`（默认 10）和 `network_retry_interval_seconds`（默认 30s）配置。
+
+## 自主工作流程
+
+在首次用户交互后，Agent 进入持久化自主循环：
+
+```
+用户发送输入 → Agent 处理 → 进入自主循环
+                                          ↓
+                              CronScheduler 每 N 分钟发送 tick
+                                          ↓
+                              ┌─── <tick> 收到 ──────────────┐
+                              │ 首次 tick：问候用户            │
+                              │ 后续 tick：自主工作            │
+                              │ 无事可做 → Sleep 工具          │
+                              └───────────────────────────────┘
+```
+
+**核心行为：**
+- **Tick 醒醒**：`<tick>` 提示保持 Agent 在轮次间存活
+- **Sleep 状态**：Sleep 工具激活时，tick 被抑制；cron 任务仍可唤醒
+- **首次 tick**：输出问候，询问用户需求
+- **后续 tick**：Agent 寻找有用工作（读文件、搜索、测试、提交）
+- **行动优先**：Agent 基于判断行动，而非请求确认
+- **模型降级**：失败时自动切换到降级模型（支持跨提供商），恢复后自动切回
+- **自主压缩续接**：压缩后 Agent 继续工作循环
 
 ## 运行方式
 
@@ -398,10 +550,13 @@ python -m src.main
 │  > [输入（2行，多行）]                │
 │  提示符 + 多行输入                     │
 ├─────────────────────────────────────┤
-│                    [Token: ⬆⬇∫]    │
-│  Token 显示（底部右侧独立行）           │
+│               [████░░░░] 72%  ⬆⬇∫  │
+│  上下文进度条（>=50%）+ Token 显示     │
 └─────────────────────────────────────┘
 ```
+
+上下文使用率进度条在 >= 50% 时显示，颜色编码：
+绿色（< 50%）、黄色（50-84%）、橙色（85-94%）、红色加粗（>= 95%）。
 
 ### OutputLexer 样式
 
@@ -410,12 +565,25 @@ python -m src.main
 | `output_area` | `#1a1a2e` 背景 | 输出区域背景 |
 | `input_area` | `#16213e` 背景 | 输入区域背景 |
 | `prompt` | cyan bold | 提示符文本 |
+| `divider` | `#444444` | 分隔线 |
+| `separator` | cyan | 回答分隔线 |
 | `tool_call` | red bold | 工具调用名称 |
 | `tool_result` | blue | 工具结果 |
-| `thinking` | gray italic | 思考内容 |
+| `thinking` | gray italic | 思考内容 / Sleep 状态 |
 | `token_info` | green | Token 统计 |
 | `user` | cyan bold | 用户输入 |
 | `error` | red | 错误消息 |
+| `context_usage_low` | green | 上下文 < 50% |
+| `context_usage_medium` | yellow | 上下文 50-84% |
+| `context_usage_high` | orange | 上下文 85-94% |
+| `context_usage_critical` | red bold | 上下文 >= 95% |
+| `compact_indicator` | cyan italic | 压缩状态指示器 |
+| `autonomous` | magenta bold | Cron/自主模式通知 |
+| `command` | green bold | 斜杠命令输出 |
+| `command_header` | cyan bold | 斜杠命令标题 |
+| `completion-menu` | `#1a1a2e` 背景 | 补全菜单背景 |
+| `completion-menu.completion` | white | 补全项 |
+| `completion-menu.completion.selected` | `#16213e` 背景 cyan bold | 选中的补全项 |
 
 ### 键盘快捷键
 
@@ -431,6 +599,49 @@ python -m src.main
 | `Ctrl+C` | 复制选中文本（如有选中文本）/ 退出（若无选中文本） |
 | `Ctrl+Q` | 退出 |
 | `Ctrl+L` | 清屏并清空记忆 |
+
+## 斜杠命令系统 (src/commands/)
+
+### CommandRegistry (registry.py)
+
+单例命令注册表，管理所有斜杠命令：
+- `register(name, description, handler, arg_spec)` — 注册命令
+- `get(name)` — 按名称获取命令
+- `list_commands()` — 列出所有已注册命令
+
+### SlashCommand 数据类
+
+```python
+@dataclass
+class SlashCommand:
+    name: str           # 命令名（不含 /）
+    description: str    # 命令描述
+    handler: Callable   # handler(tui, args) -> None
+    arg_spec: str       # 参数说明（如 "[name]"）
+    enabled: bool       # 是否启用
+```
+
+### 内置命令 (core.py)
+
+| 命令 | 说明 |
+|------|------|
+| `/help` | 显示所有可用命令 |
+| `/clear` | 清除屏幕和对话记忆 |
+| `/model [name]` | 显示或切换当前模型 |
+| `/config` | 显示当前配置 |
+| `/history` | 显示对话历史 |
+| `/save` | 保存当前会话 |
+| `/load [id]` | 加载已保存的会话 |
+| `/memory [count]` | 显示最近记忆内容 |
+| `/compact` | 手动触发上下文压缩 |
+| `/mcp` | 显示 MCP 服务器状态 |
+| `/tools` | 列出可用工具 |
+| `/system` | 显示系统提示词 |
+| `/version` | 显示版本信息 |
+
+### SlashCommandCompleter (completer.py)
+
+基于 `BufferControl` 的 Tab 补全器，输入 `/` 时触发命令名补全。
 
 ## Token 消耗统计
 
@@ -448,23 +659,14 @@ Token 计算规则：
 
 - 已启用中文 IME 支持
 - 对话超过 `memory_threshold` 时自动摘要
-- **可自定义压缩**：编辑 `compact_prompt.md` 自定义摘要生成提示词
+- **可自定义压缩**：编辑 `prompts/compact_prompt.md` 自定义摘要生成提示词
 - MCP 服务器：Tavily 搜索 + 任何 stdio/HTTP MCP 服务器
 - 外部工具使用 PyInstaller 编译
 - 自定义 `_OutputWindow(Window)` 子类处理 Agent 运行期间的鼠标事件屏蔽和同步光标+vertical_scroll 滚动
 
-## UI 开发须知
-
-对于所有 UI（TUI）相关的修改，必须先查阅 `manual/prompt_toolkit_MANUAL.md`（prompt_toolkit 3.0.52 API 手册）。
-
-该手册覆盖：Application、Layout、Window、FormattedTextControl、BufferControl、ScrollOffsets、MouseEventType、KeyBindings、mouse_events、样式系统、Widgets 等。
-
-## Python 开发须知
-
-对于所有 Python 相关问题（标准库用法、语言语法、API 等），必须先查阅 `manual/python-3.14-docs-text/index.md` 索引定位到对应文档文件，再阅读手册内容获取答案，而非直接查看源码。
-
-只有在手册未能解答时，才去查源码。
-
 ## 环境
 
-- Windows 11 + PowerShell
+- Windows 10 + PowerShell+windows Terminal
+
+
+每次修改完子工程都要重新编译后再测试

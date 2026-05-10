@@ -2,7 +2,7 @@
 
 import json
 import logging
-import os
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -11,6 +11,10 @@ from .utils.path import get_project_root
 from .config import config
 
 logger = logging.getLogger(__name__)
+
+# Compact constants
+MICRO_COMPACT_KEEP_COUNT = 5
+SUMMARY_TRUNCATE_LENGTH = 500
 
 
 class Memory:
@@ -25,11 +29,14 @@ class Memory:
     """
 
     _instance: Optional["Memory"] = None
+    _lock = threading.Lock()
 
     def __new__(cls) -> "Memory":
         if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._initialize()
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._initialize()
         return cls._instance
 
     def _initialize(self) -> None:
@@ -38,6 +45,8 @@ class Memory:
         self._last_updated: Optional[str] = None
         self._session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         self._history_dir = get_project_root() / "memory" / "history"
+        self._rw_lock = threading.RLock()
+        logger.debug(f"Memory initialized: session_id={self._session_id}")
 
     def save_current_session(self) -> str:
         """
@@ -107,10 +116,11 @@ class Memory:
                         "saved_at": data.get("saved_at", ""),
                         "message_count": len(data.get("history", []))
                     })
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"Failed to read session file {filepath.name}: {e}")
                     continue
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to list sessions in {self._history_dir}: {e}")
         return sessions
 
     def add_message(self, role: str, content: str, tool_calls: Optional[List[Dict]] = None) -> None:
@@ -122,35 +132,41 @@ class Memory:
         }
         if tool_calls:
             message["tool_calls"] = tool_calls
-        self._history.append(message)
-        self._last_updated = datetime.now().isoformat()
+        with self._rw_lock:
+            self._history.append(message)
+            self._last_updated = datetime.now().isoformat()
         logger.debug(f"Added {role} message, session has {len(self._history)} messages")
 
     def add_tool_result(self, tool_call_id: str, tool_name: str, result: str) -> None:
         """Add a tool execution result to current session"""
-        self._history.append({
-            "role": "tool",
-            "tool_call_id": tool_call_id,
-            "tool_name": tool_name,
-            "content": result,
-            "timestamp": datetime.now().isoformat()
-        })
-        self._last_updated = datetime.now().isoformat()
+        logger.debug(f"Adding tool result: {tool_name}, {len(result or '')} chars")
+        with self._rw_lock:
+            self._history.append({
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "tool_name": tool_name,
+                "content": result,
+                "timestamp": datetime.now().isoformat()
+            })
+            self._last_updated = datetime.now().isoformat()
 
     def get_messages(self) -> List[Dict[str, Any]]:
         """Get current session conversation history"""
-        return self._history
+        with self._rw_lock:
+            return list(self._history)
 
     def get_context(self, max_messages: int = 20) -> List[Dict[str, Any]]:
         """Get recent messages from current session"""
-        return self._history[-max_messages:] if self._history else []
+        with self._rw_lock:
+            return self._history[-max_messages:] if self._history else []
 
     def clear(self) -> None:
         """Clear current session memory only"""
-        msg_count = len(self._history)
-        self._history = []
-        self._last_updated = None
-        self._session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        with self._rw_lock:
+            msg_count = len(self._history)
+            self._history = []
+            self._last_updated = None
+            self._session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         logger.info(f"Cleared {msg_count} messages, new session_id={self._session_id}")
 
     def get_conversation_for_llm(self, max_messages: int = 40) -> List[Dict[str, Any]]:
@@ -170,17 +186,21 @@ class Memory:
                     "content": m.get("content", "")
                 })
             else:
-                result.append({k: v for k, v in m.items() if k not in ["summary", "session_id", "tool_name", "timestamp"]})
+                result.append({k: v for k, v in m.items() if k in ("role", "content", "tool_calls", "tool_call_id", "reasoning_content")})
         return result
 
 
 def is_compact_boundary(message: Dict[str, Any]) -> bool:
     """检查消息是否为压缩边界标记"""
-    return (
+    is_boundary = (
         message.get("role") == "system"
         and message.get("content") == "[COMPACT_BOUNDARY]"
         and "compact_boundary" in message
     )
+    if not is_boundary and message.get("content") == "[COMPACT_BOUNDARY]":
+        logger.warning(f"Partial compact boundary match: role={message.get('role')}, "
+                      f"has_compact_boundary={'compact_boundary' in message}")
+    return is_boundary
 
 
 def create_compact_boundary(
@@ -216,6 +236,7 @@ class CompactEngine:
     LEVEL_FULL = 3
 
     def __init__(self, memory: "Memory"):
+        logger.debug("CompactEngine initialized")
         self._memory = memory
         self._compact_count = 0
         self._last_compact_at: Optional[str] = None
@@ -246,20 +267,24 @@ class CompactEngine:
 
         # Full Compact: 使用率 >= 95%
         if usage_ratio >= config.compact_full_threshold:
+            logger.info(f"should_compact: FULL, ratio={usage_ratio:.2f}")
             return True, self.LEVEL_FULL
 
         # Auto Compact: 使用率 >= 85%
         if usage_ratio >= config.compact_auto_threshold:
+            logger.info(f"should_compact: AUTO, ratio={usage_ratio:.2f}")
             return True, self.LEVEL_AUTO
 
         # Micro Compact: 连续工具调用 >= 阈值
         if self._tool_call_streak >= config.compact_micro_streak:
+            logger.debug(f"should_compact: MICRO (streak={self._tool_call_streak})")
             return True, self.LEVEL_MICRO
 
         # Micro Compact: 距离上次用户消息超过时间阈值
         if self._last_user_message_time:
             elapsed = (datetime.now() - self._last_user_message_time).total_seconds() / 60
             if elapsed >= config.compact_micro_gap_minutes:
+                logger.debug(f"should_compact: MICRO (gap={elapsed:.1f}min)")
                 return True, self.LEVEL_MICRO
 
         return False, 0
@@ -269,6 +294,8 @@ class CompactEngine:
         执行压缩
 
         Args:
+            level: 压缩级别 (1=Micro, 2=Auto, 3=Full)
+            llm_client: LLM 客户端（Auto/Full 级别需要）
             level: 压缩级别 (1=Micro, 2=Auto, 3=Full)
             llm_client: LLM 客户端（Auto/Full 级别需要）
 
@@ -316,19 +343,20 @@ class CompactEngine:
         cleared_tokens = 0
         tool_results = [
             (i, m) for i, m in enumerate(self._memory._history)
-            if m.get("role") == "tool" and not m.get("_cleared")
+            if m.get("role") == "tool" and m.get("_cleared") is not True
         ]
 
         # 保留最近的 tool_results
-        keep_recent = 5
+        keep_recent = MICRO_COMPACT_KEEP_COUNT
         # 正确处理 keep_recent=0 的情况（Python 中 :-0 等于 :0，返回空列表）
         if keep_recent > 0:
             to_clear = tool_results[:-keep_recent]
         else:
             to_clear = tool_results[:] if tool_results else []
         for i, msg in to_clear:
-            cleared_tokens += count_tokens(msg.get("content", ""))
-            msg["content"] = f"[工具结果已清理 • 约 {int(cleared_tokens)} tokens]"
+            msg_tokens = count_tokens(msg.get("content", ""))
+            cleared_tokens += msg_tokens
+            msg["content"] = f"[工具结果已清理 • 约 {int(msg_tokens)} tokens]"
             msg["_cleared"] = True
             cleared += 1
 
@@ -394,8 +422,8 @@ class CompactEngine:
             "timestamp": datetime.now().isoformat()
         })
 
-        # 保留最近的 preserved 消息
-        self._memory._history.extend(preserved[-preserve_count:])
+        # 保留最近的 preserved 消息 (already sliced to preserve_count above)
+        self._memory._history.extend(preserved)
 
         tokens_saved = original_tokens - sum(
             count_tokens(m.get("content", "") or "")
@@ -441,9 +469,13 @@ class CompactEngine:
         })
 
         logger.info(f"Full compact: saved session with {original_count} messages")
+        new_tokens = sum(
+            count_tokens(m.get("content", "") or "")
+            for m in self._memory._history
+        )
         return {
             "compacted": True,
-            "tokens_saved": int(original_tokens),
+            "tokens_saved": max(int(original_tokens - new_tokens), 0),
             "messages_removed": original_count - 2  # boundary + summary
         }
 
@@ -463,71 +495,55 @@ class CompactEngine:
             role = m.get("role", "?")
             content = m.get("content", "")
             if content:
-                msg_texts.append(f"{role}: {content[:500]}")
+                msg_texts.append(f"{role}: {content[:SUMMARY_TRUNCATE_LENGTH]}")
 
         messages_content = f"{'='*60}\n{chr(10).join(msg_texts[-20:])}\n{'='*60}"
 
-        # 从配置文件读取提示词模板
+        # Load prompt template from config
         try:
-            prompt_template = config.get_compact_prompt()
-            # 使用更健壮的替换逻辑
+            prompt_template = config.get_summary_template()
             if "(对话历史将自动插入)" in prompt_template:
                 prompt = prompt_template.replace("(对话历史将自动插入)", messages_content)
             else:
-                # 如果用户修改了模板，使用默认格式
-                prompt = f"""请为以下对话历史生成简洁摘要（500 tokens以内）：
-
-{messages_content}
-
-摘要要求：
-- 提炼核心主题和任务
-- 保留重要决策和结论
-- 标注涉及的文件和工具
-"""
+                prompt = f"{prompt_template}\n\n{messages_content}"
         except Exception as e:
-            logger.warning(f"Failed to load compact prompt from {config.compact_prompt_path}: {e}. Using default prompt.")
-            prompt = f"""请为以下对话历史生成简洁摘要（500 tokens以内）：
-
-{messages_content}
-
-摘要要求：
-- 提炼核心主题和任务
-- 保留重要决策和结论
-- 标注涉及的文件和工具
-"""
+            logger.warning(f"Failed to load summary template: {e}")
+            prompt = f"Please generate a concise summary for the following conversation:\n\n{messages_content}"
 
         try:
             summary_messages = [
-                create_system_message("你是摘要生成专家。回复纯文本摘要，不要调用工具。"),
+                create_system_message(config.summary_system_prompt),
                 create_user_message(prompt)
             ]
 
             # 使用真正的 LLM 生成摘要
             if llm_client is not None:
-                response, _, _ = llm_client.chat(summary_messages, stream=False)
+                response, _, _, _ = llm_client.chat(summary_messages, stream=False)
                 return response[:2000] if response else "[摘要生成失败: 无响应]"
             else:
-                # fallback 到简单摘要
-                response, _ = self._llm_fallback_summary(summary_messages)
+                # fallback 到简单摘要，传入原始对话历史
+                response, _ = self._llm_fallback_summary(summary_messages, original_history=msg_range)
                 return response[:2000]
         except Exception as e:
             logger.error(f"Summary generation failed: {e}")
             return f"[摘要生成失败: {str(e)[:100]}]"
 
-    def _llm_fallback_summary(self, messages: List[Dict[str, Any]]) -> tuple:
+    def _llm_fallback_summary(self, messages: List[Dict[str, Any]], original_history: Optional[List[Dict[str, Any]]] = None) -> tuple:
         """基于规则的简单摘要生成（不使用LLM）"""
+        # 使用原始对话历史（如果提供），否则使用传入的摘要请求消息
+        source = original_history if original_history else messages
+
         # 提取关键信息：用户消息、工具调用、结果
         user_inputs = []
         tool_calls = []
         last_tool = None
 
-        for m in messages:
+        for m in source:
             role = m.get("role", "")
             content = m.get("content", "") or ""
             tool_name = m.get("tool_name", "")
 
             if role == "user" and content:
-                # 提取前100字符作为关键输入
                 user_inputs.append(content[:100])
             elif role == "tool" and tool_name:
                 tool_calls.append(tool_name)
@@ -537,12 +553,10 @@ class CompactEngine:
         summary_parts = []
 
         if user_inputs:
-            # 取最近3条用户输入
             recent = user_inputs[-3:]
             summary_parts.append(f"用户输入({len(user_inputs)}条): {' | '.join(recent[:2])}")
 
         if tool_calls:
-            # 统计工具调用
             from collections import Counter
             tool_counts = Counter(tool_calls)
             top_tools = tool_counts.most_common(3)

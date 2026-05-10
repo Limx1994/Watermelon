@@ -114,17 +114,5 @@ class MCPProtocol:
     INITIALIZE = "initialize"
     NOTIFICATIONS_INITIALIZED = "notifications/initialized"
 
-    # Special methods
-    PROGRESS = "$/progress"
-    CANCEL = "$/cancel"
-
     # Error codes
-    PARSE_ERROR = -32700
-    INVALID_REQUEST = -32600
     METHOD_NOT_FOUND = -32601
-    INVALID_PARAMS = -32602
-    INTERNAL_ERROR = -32603
-
-    # Tool result codes
-    TOOL_SUCCESS = 1
-    TOOL_ERROR = 0

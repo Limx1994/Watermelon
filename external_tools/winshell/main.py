@@ -16,9 +16,9 @@ from typing import Optional, Tuple
 
 # Set UTF-8 encoding for stdout before any output
 if sys.stdout.encoding != 'utf-8':
-    sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', buffering=1)
+    sys.stdout = os.fdopen(os.dup(sys.stdout.fileno()), mode='w', encoding='utf-8', buffering=1)
 if sys.stderr.encoding != 'utf-8':
-    sys.stderr = open(sys.stderr.fileno(), mode='w', encoding='utf-8', buffering=1)
+    sys.stderr = os.fdopen(os.dup(sys.stderr.fileno()), mode='w', encoding='utf-8', buffering=1)
 
 from alias_resolver import resolve_alias, is_complex_script, resolve_alias_with_detection
 from output_builder import build_output, PowerShellOutput
@@ -85,6 +85,25 @@ def cleanup():
                 pass
 
 
+def _decode_ps_output(raw_bytes: bytes) -> str:
+    """Decode PowerShell output bytes, trying UTF-8 first then system encoding."""
+    if not raw_bytes:
+        return ""
+    # PowerShell on Windows often outputs system encoding (GBK on Chinese Windows)
+    # Try UTF-8 first, fallback to system default
+    try:
+        decoded = raw_bytes.decode("utf-8")
+        # Check if result contains replacement characters (UTF-8 decode of GBK bytes)
+        if "�" not in decoded:
+            return decoded.replace('\r\n', '\n')
+    except UnicodeDecodeError:
+        pass
+    # Fallback: decode using system default encoding
+    import locale
+    sys_enc = locale.getpreferredencoding(False) or "utf-8"
+    return raw_bytes.decode(sys_enc, errors="replace").replace('\r\n', '\n')
+
+
 def execute_simple_command(command: str, timeout_ms: int, cwd: str) -> Tuple[subprocess.CompletedProcess, bool]:
     """
     Execute a simple command via powershell -Command.
@@ -99,11 +118,10 @@ def execute_simple_command(command: str, timeout_ms: int, cwd: str) -> Tuple[sub
             ["powershell", "-NoProfile", "-NoLogo", "-Command", command],
             cwd=cwd,
             capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             timeout=timeout_sec,
         )
+        proc.stdout = _decode_ps_output(proc.stdout)
+        proc.stderr = _decode_ps_output(proc.stderr)
         return proc, False
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(args=[], returncode=124, stdout="", stderr="Command timed out"), True
@@ -143,11 +161,10 @@ def execute_script_file(script_path: Path, timeout_ms: int, cwd: str) -> Tuple[s
             ["powershell", "-NoProfile", "-NoLogo", "-File", str(script_path)],
             cwd=cwd,
             capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             timeout=timeout_sec,
         )
+        proc.stdout = _decode_ps_output(proc.stdout)
+        proc.stderr = _decode_ps_output(proc.stderr)
         return proc, False
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(args=[], returncode=124, stdout="", stderr="Command timed out"), True
@@ -288,13 +305,13 @@ def main():
     parser.add_argument("--description", default="", help="Command description (for logging)")
     parser.add_argument(
         "--run-in-background",
-        type=lambda x: x.lower() == "true",
+        action="store_true",
         default=False,
         help="Run command in background",
     )
     parser.add_argument(
         "--dangerously-disable-sandbox",
-        type=lambda x: x.lower() == "true",
+        action="store_true",
         default=False,
         help="Disable all validation (dangerous)",
     )

@@ -2,12 +2,13 @@
 
 import json
 import logging
+import time
 from typing import Any, Dict, List, Optional
-
-import requests
 
 from .base import BaseMCPClient
 from .protocol import MCPProtocol
+
+logger = logging.getLogger(__name__)
 
 
 class HttpMCPClient(BaseMCPClient):
@@ -43,8 +44,15 @@ class HttpMCPClient(BaseMCPClient):
         if self._connected:
             return True
 
+        try:
+            import requests as _requests
+            self._requests = _requests
+        except ImportError:
+            logger.error(f"MCP HTTP client '{self.name}': requests library not installed")
+            return False
+
         if not self.url:
-            logging.error(f"MCP HTTP client '{self.name}': no URL configured")
+            logger.error(f"MCP HTTP client '{self.name}': no URL configured")
             return False
 
         try:
@@ -64,10 +72,10 @@ class HttpMCPClient(BaseMCPClient):
             self._discover_tools()
 
             self._connected = True
-            logging.info(f"MCP HTTP client '{self.name}' connected to {self.url}")
+            logger.info(f"MCP HTTP client '{self.name}' connected to {self.url}")
             return True
         except Exception as e:
-            logging.error(f"MCP HTTP client '{self.name}' connection failed: {e}")
+            logger.error(f"MCP HTTP client '{self.name}' connection failed: {e}")
             return False
 
     def disconnect(self) -> None:
@@ -120,6 +128,7 @@ class HttpMCPClient(BaseMCPClient):
                 "error": content if is_error else None
             }
         except Exception as e:
+            logger.error(f"MCP HTTP call_tool '{tool_name}' failed: {e}")
             return {
                 "success": False,
                 "content": "",
@@ -144,50 +153,66 @@ class HttpMCPClient(BaseMCPClient):
         ]
 
     def _send_request(self, request: Dict[str, Any], timeout: int, use_session: bool = True) -> Any:
-        """Send a JSON-RPC request via HTTP POST."""
-        try:
-            headers = dict(self._base_headers)
-            if use_session and self._session_id:
-                headers["MCP-Session-Id"] = self._session_id
+        """Send a JSON-RPC request via HTTP POST with retry."""
+        if not hasattr(self, '_requests'):
+            raise Exception("requests library not installed")
 
-            response = requests.post(
-                self.url,
-                json=request,
-                headers=headers,
-                timeout=timeout
-            )
+        last_error = None
+        for attempt in range(3):
+            try:
+                headers = dict(self._base_headers)
+                if use_session and self._session_id:
+                    headers["MCP-Session-Id"] = self._session_id
 
-            # Extract session ID from response headers if present
-            session_id = response.headers.get("MCP-Session-Id") or response.headers.get("mcp-session-id")
-            if session_id and not self._session_id:
-                self._session_id = session_id
-                logging.debug(f"MCP session established: {self._session_id}")
+                response = self._requests.post(
+                    self.url,
+                    json=request,
+                    headers=headers,
+                    timeout=timeout
+                )
 
-            response.raise_for_status()
-            result = response.json()
+                # Extract session ID from response headers if present
+                session_id = response.headers.get("MCP-Session-Id") or response.headers.get("mcp-session-id")
+                if session_id and not self._session_id:
+                    self._session_id = session_id
+                    logger.debug(f"MCP session established: {self._session_id}")
 
-            if "error" in result:
-                err = result["error"]
-                raise Exception(f"MCP error {err.get('code')}: {err.get('message')}")
+                response.raise_for_status()
+                result = response.json()
 
-            return result.get("result", {})
-        except requests.RequestException as e:
-            raise Exception(f"HTTP request failed: {e}")
+                if "error" in result:
+                    err = result["error"]
+                    raise Exception(f"MCP error {err.get('code')}: {err.get('message')}")
+
+                return result.get("result", {})
+            except self._requests.RequestException as e:
+                # Don't retry client errors (4xx) - they won't succeed on retry
+                if hasattr(e, 'response') and e.response is not None:
+                    if 400 <= e.response.status_code < 500:
+                        raise Exception(f"MCP client error {e.response.status_code}: {e}")
+                wait = min(2 ** attempt, 10)
+                logger.warning(f"HTTP MCP request failed (attempt {attempt+1}/3): {e}")
+                last_error = e
+                if attempt < 2:
+                    time.sleep(wait)
+        raise Exception(f"HTTP request failed after 3 attempts: {last_error}")
 
     def _send_notification(self, notification: Dict[str, Any]) -> None:
         """Send a JSON-RPC notification (no response expected)."""
+        if not hasattr(self, '_requests'):
+            return
         try:
             headers = dict(self._base_headers)
             if self._session_id:
                 headers["MCP-Session-Id"] = self._session_id
-            requests.post(
+            self._requests.post(
                 self.url,
                 json=notification,
                 headers=headers,
                 timeout=5
             )
-        except Exception:
-            pass  # Notifications don't expect responses
+        except Exception as e:
+            logger.warning(f"MCP HTTP notification failed: {e}")
 
     def _discover_tools(self) -> None:
         """Discover available tools via tools/list."""
@@ -198,6 +223,7 @@ class HttpMCPClient(BaseMCPClient):
             "params": {}
         }, timeout=10)
         self._tools = result.get("tools", [])
+        logger.info(f"MCP HTTP discovered {len(self._tools)} tools for '{self.name}'")
 
     def _next_request_id(self) -> int:
         """Get the next monotonically increasing request ID."""

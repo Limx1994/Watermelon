@@ -9,6 +9,7 @@ from typing import Optional, List
 @dataclass
 class PowerShellOutput:
     """Structured output for PowerShell command execution."""
+    success: bool = True
     stdout: str = ""
     stderr: str = ""
     interrupted: bool = False
@@ -18,12 +19,18 @@ class PowerShellOutput:
     background_task_id: Optional[str] = None
     backgrounded_by_user: bool = False
     assistant_auto_backgrounded: bool = False
+    return_code: int = 0
 
     def to_dict(self) -> dict:
-        """Convert to dictionary, excluding None values for cleaner output."""
+        """Convert to dictionary, excluding None/empty values for cleaner output."""
         result = {}
         for key, value in asdict(self).items():
-            if value is not None and value != "" and value is not False:
+            if key == "success":
+                result[key] = value
+            elif key == "return_code":
+                # Always include return code
+                result["returnCode"] = value
+            elif value is not None and value != "" and value is not False:
                 result[self._to_camel_case(key)] = value
         return result
 
@@ -44,6 +51,7 @@ class PowerShellOutput:
             return PowerShellOutput(
                 stdout=data.get("stdout", ""),
                 stderr=data.get("stderr", ""),
+                return_code=data.get("returnCode", 0),
                 interrupted=data.get("interrupted", False),
                 return_code_interpretation=data.get("returnCodeInterpretation"),
                 is_image=data.get("isImage", False),
@@ -56,6 +64,7 @@ class PowerShellOutput:
             return PowerShellOutput(
                 stdout="",
                 stderr=data.get("error", ""),
+                return_code=data.get("returnCode", 1),
                 interrupted=False,
                 return_code_interpretation="Error",
             )
@@ -106,8 +115,9 @@ def interpret_return_code(code: int, command: Optional[str] = None) -> str:
         Human-readable interpretation
     """
     # Check for command-specific interpretation
-    if command:
-        cmd_lower = command.lower().split()[0] if command else ""
+    if command and command.strip():
+        parts = command.lower().split()
+        cmd_lower = parts[0] if parts else ""
         for cmd_key, interpretations in COMMAND_INTERPRETATIONS.items():
             if cmd_key in cmd_lower:
                 if code in interpretations:
@@ -195,9 +205,14 @@ def build_output(
     # Truncate if needed
     truncated_stdout = truncate_output(stdout, max_output_lines)
 
+    # Determine success based on return code only
+    is_success = (return_code == 0)
+
     return PowerShellOutput(
+        success=is_success,
         stdout=truncated_stdout,
         stderr=stderr,
+        return_code=return_code,
         interrupted=interrupted,
         return_code_interpretation=interpret_return_code(return_code, command),
         is_image=detect_image_output(stdout, stderr),
