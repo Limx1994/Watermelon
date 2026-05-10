@@ -5,14 +5,13 @@ __pycache__/
 *.pyc
 .env
 *.egg-info/
-dist/
+/dist/
 build/
 .venv/
 venv/
 *.log
 .DS_Store
 config.json
-config/
 
 # Archives
 *.7z
