@@ -13,7 +13,7 @@
 - **流式输出**：实时逐 token 显示响应，带样式化片段
 - **样式化显示**：思考内容灰色斜体显示，回答带青色分隔线，Token 栏固定在底部（独立行，靠右对齐）
 - **Token 统计**：实时显示上传/下载/累计 Token，固定在底栏右下角
-- **自主模式**：持久化 Agent 循环，支持 tick 醒醒、proactive 指令、Sleep 工具空闲等待
+- **自主模式**：持久化 Agent 循环，支持 tick 唤醒、proactive 指令、Sleep 工具空闲等待
 - **模型降级恢复**：主模型失败时自动切换备用模型，恢复后自动切回
 - **标准 Cron 调度**：支持 5-field cron 表达式（via croniter），带抖动避免同时触发
 - **斜杠命令**：13 个内置命令（/help、/model、/save、/compact 等），支持 Tab 补全
@@ -142,7 +142,7 @@ AGImyCLI/
 | | `temperature` | 采样温度 | `0.7` |
 | | `top_p` | 核采样参数 | `0.7` |
 | | `reasoning_effort` | 思考深度 | `max` |
-| | `context_window` | 最大上下文窗口（单位为千，如 128 = 128K） | `128` |
+| | `context_window` | 最大上下文窗口（单位为千，如 128 = 128K；>= 1000 按原始 token 数计算）。有效上下文窗口 = `context_window - max_output_tokens` | `128` |
 | | `max_output_tokens` | 最大输出 Token 数 | `20000` |
 | `agent` | `max_turns` | 最大对话轮次 | `50` |
 | | `max_retries` | 失败最大重试次数 | `3` |
@@ -188,8 +188,42 @@ AGImyCLI/
 
 | 配置项 | 键 | 说明 | 默认值 |
 |--------|-----|------|--------|
-| `autonomous` | `tick_interval_minutes` | Tick 醒醒间隔（分钟） | `10` |
+| `autonomous` | `tick_interval_minutes` | Tick 唤醒间隔（分钟） | `10` |
 | | `cron_tasks` | 定时任务定义列表 | `[]` |
+
+#### Cron 任务格式
+
+`cron_tasks` 列表中每个任务遵循以下格式：
+
+```json
+{
+  "name": "task-name",
+  "prompt": "AI 应该做什么",
+  "cron_expression": "*/5 * * * *",
+  "interval_minutes": 30,
+  "enabled": true
+}
+```
+
+- `cron_expression`：标准 5-field cron（via croniter）。优先于 `interval_minutes`。
+- `interval_minutes`：无 cron_expression 时的简单间隔回退。
+
+### Prompts — 提示词模板系统
+
+`prompts` 配置段将逻辑名称映射到 `.md` 文件路径：
+
+| 模板 | 用途 |
+|------|------|
+| `autonomous_instructions` | 注入系统提示词，定义自主模式行为指令 |
+| `compact_resume` | 上下文压缩后发送，指示 AI 继续工作而非等待输入 |
+| `max_tokens_recovery` | 输出达到 token 上限时的恢复提示 |
+| `context_too_long` | 上下文窗口溢出时的恢复提示 |
+| `token_budget_nudge` | 上下文使用率过高时注入的警告（支持 `{pct:.0%}` 占位符） |
+| `summary_system` | 摘要生成的系统提示词 |
+| `summary_template` | 摘要生成模板（支持 `{messages}` 占位符） |
+| `compact_prompt` | 压缩摘要生成提示词模板 |
+
+所有提示词可通过编辑 `prompts/` 目录下的 `.md` 文件自定义。路径为空或文件缺失时使用内置默认字符串。
 
 ### config/mcp.json — MCP 服务器配置
 
@@ -338,7 +372,7 @@ Token 计算规则：
 ```
 
 **核心行为：**
-- **Tick 醒醒**：`<tick>` 提示保持 Agent 在轮次间存活
+- **Tick 唤醒**：`<tick>` 提示保持 Agent 在轮次间存活
 - **Sleep 状态**：Sleep 工具激活时，tick 被抑制；cron 任务仍可唤醒
 - **首次 tick**：输出问候，询问用户需求
 - **后续 tick**：Agent 寻找有用工作（读文件、搜索、测试、提交）

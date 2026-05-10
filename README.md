@@ -142,7 +142,7 @@ AGImyCLI/
 | | `temperature` | Sampling temperature | `0.7` |
 | | `top_p` | Nucleus sampling | `0.7` |
 | | `reasoning_effort` | Reasoning depth | `max` |
-| | `context_window` | Max context window (in thousands, e.g. 128 = 128K) | `128` |
+| | `context_window` | Max context window (in thousands, e.g. 128 = 128K; values >= 1000 treated as raw tokens). Effective context = `context_window - max_output_tokens` | `128` |
 | | `max_output_tokens` | Max output tokens | `20000` |
 | `agent` | `max_turns` | Max conversation turns | `50` |
 | | `max_retries` | Max retry count on failure | `3` |
@@ -190,6 +190,40 @@ AGImyCLI/
 |---------|-----|-------------|---------|
 | `autonomous` | `tick_interval_minutes` | Tick interval for proactive wake-up (minutes) | `10` |
 | | `cron_tasks` | List of cron task definitions | `[]` |
+
+#### Cron Task Format
+
+Each task in the `cron_tasks` list follows this format:
+
+```json
+{
+  "name": "task-name",
+  "prompt": "What the AI should do",
+  "cron_expression": "*/5 * * * *",
+  "interval_minutes": 30,
+  "enabled": true
+}
+```
+
+- `cron_expression`: Standard 5-field cron (via croniter). Takes precedence over `interval_minutes`.
+- `interval_minutes`: Simple interval fallback if no cron_expression.
+
+### Prompts — Prompt Template System
+
+The `prompts` config section maps logical names to `.md` file paths:
+
+| Template | Purpose |
+|----------|---------|
+| `autonomous_instructions` | Behavior directives injected into system prompt for autonomous mode |
+| `compact_resume` | Message sent after context compression to resume work |
+| `max_tokens_recovery` | Recovery prompt when output hits token limit |
+| `context_too_long` | Recovery prompt when context window is exceeded |
+| `token_budget_nudge` | Warning injected at high context usage (supports `{pct:.0%}` placeholder) |
+| `summary_system` | System prompt for summary generation |
+| `summary_template` | Template for summary generation (supports `{messages}` placeholder) |
+| `compact_prompt` | Prompt template for generating compression summaries |
+
+All prompts are customizable by editing the `.md` files in the `prompts/` directory. If a path is empty or the file is missing, a built-in default string is used.
 
 ### config/mcp.json — MCP Server Configuration
 

@@ -16,6 +16,7 @@ config/
 
 # Archives
 *.7z
+*.zip
 
 # Ad-hoc scripts
 _build_*.py
