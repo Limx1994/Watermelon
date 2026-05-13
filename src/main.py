@@ -1,11 +1,9 @@
 """AGImyCLI - Main entry point"""
 
 import logging
-import sys
-import os
+import platform
 
 # Initialize logging BEFORE any other imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from src.utils.logging import setup_logging
 setup_logging()
 
@@ -16,8 +14,7 @@ from src.tui import run_tui
 
 def main():
     """Main entry point"""
-    logger.info("AGImyCLI starting")
-    print("Initializing AGImyCLI...")
+    logger.info(f"AGImyCLI starting | Python {platform.python_version()} | {platform.system()} {platform.release()}")
 
     # Ensure required directories exist
     from src.utils.path import ensure_directory
@@ -28,7 +25,10 @@ def main():
         logger.warning(f"Failed to create directories: {e}")
 
     # Run TUI
-    run_tui()
+    try:
+        run_tui()
+    except Exception as e:
+        logger.error(f"Fatal error: {e}", exc_info=True)
     logger.info("AGImyCLI exit")
 
 

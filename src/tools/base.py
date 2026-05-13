@@ -1,7 +1,10 @@
 """Base class for all tools"""
 
+import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class ToolResult:
@@ -79,15 +82,6 @@ class BaseTool(ABC):
                     if not isinstance(value, py_type):
                         errors.append(f"Parameter '{field}' should be {expected_type}, got {type(value).__name__}")
 
+        if errors:
+            logger.warning(f"Validation failed for {self.name}: {'; '.join(errors)}")
         return errors
-
-    def get_definition(self) -> Dict[str, Any]:
-        """Get the full tool definition for LLM function calling"""
-        return {
-            "type": "function",
-            "function": {
-                "name": self.name,
-                "description": self.description,
-                "parameters": self.get_schema()
-            }
-        }

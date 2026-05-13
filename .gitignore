@@ -12,6 +12,7 @@ venv/
 *.log
 .DS_Store
 config.json
+config/
 
 # Archives
 *.7z

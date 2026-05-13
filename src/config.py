@@ -3,12 +3,31 @@
 import json
 import logging
 import threading
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .utils.path import resolve_path
 
 logger = logging.getLogger(__name__)
+
+# System Prompt section keys in order (assembled into complete system prompt)
+_SYSTEM_SECTIONS = [
+    "system_intro",
+    "system_rules",
+    "system_doing_tasks",
+    "system_tool_usage",
+    "system_tone_style",
+    "system_output_efficiency",
+]
+
+# Defaults for each section (fallback if file not found)
+_SYSTEM_SECTION_DEFAULTS = {
+    "system_intro": "You are an interactive agent that helps users with software engineering tasks.",
+    "system_rules": "# System",
+    "system_doing_tasks": "# Doing tasks",
+    "system_tool_usage": "# Using your tools",
+    "system_tone_style": "# Tone and style",
+    "system_output_efficiency": "# Output efficiency",
+}
 
 
 class Config:
@@ -64,6 +83,7 @@ class Config:
                 for name, server_config in raw_config["mcpServers"].items():
                     servers.append({
                         "name": name,
+                        "enabled": server_config.get("enabled", True),
                         "type": server_config.get("type", "stdio"),
                         "url": server_config.get("url", ""),
                         "command": server_config.get("command", ""),
@@ -75,19 +95,14 @@ class Config:
                 self._mcp_config = {"enabled": True, "servers": servers}
             else:
                 self._mcp_config = raw_config
+            server_count = len(self._mcp_config.get("servers", []))
+            logger.info(f"MCP config loaded: {server_count} servers")
         except FileNotFoundError:
             logger.debug("mcp.json not found, using defaults")
             self._mcp_config = {}
         except Exception as e:
             logger.warning(f"MCP config load failed: {e}")
             self._mcp_config = {}
-
-    def reload(self) -> None:
-        """Reload configuration from file"""
-        self._load_config()
-        self._load_mcp_config()
-        self._system_prompt_cache = None
-        logger.info(f"Configuration reloaded: model={self.model} context_window={self.context_window}")
 
     # OpenAI / LLM Configuration
     @property
@@ -166,11 +181,6 @@ class Config:
         return self._config.get("compact", {}).get("buffer_tokens", 13000)
 
     @property
-    def compact_threshold(self) -> int:
-        """触发压缩的 token 数阈值"""
-        return self.effective_context_window - self.compact_buffer_tokens
-
-    @property
     def compact_micro_streak(self) -> int:
         """Micro Compact 连续工具调用阈值"""
         return self._config.get("compact", {}).get("micro_compact_streak", 3)
@@ -195,16 +205,6 @@ class Config:
         """压缩后保留的最近消息数"""
         return self._config.get("compact", {}).get("preserve_recent_messages", 10)
 
-    @property
-    def compact_prompt_path(self) -> str:
-        """压缩提示词文件路径"""
-        return self._config.get("compact", {}).get("prompt_path", "./prompts/compact_prompt.md")
-
-    def get_compact_prompt(self) -> str:
-        """Read compact prompt template from configured path, with caching."""
-        return self._load_prompt("compact_prompt",
-            "Please generate a concise summary for the following conversation:\n{messages}\n{requirements}")
-
     # Agent Configuration
     @property
     def max_turns(self) -> int:
@@ -213,11 +213,6 @@ class Config:
     @property
     def max_retries(self) -> int:
         return self._config.get("agent", {}).get("max_retries", 3)
-
-    @property
-    def retry_interval_seconds(self) -> int:
-        """重试间隔秒数（默认60秒=1分钟）"""
-        return self._config.get("agent", {}).get("retry_interval_seconds", 60)
 
     @property
     def network_max_retries(self) -> int:
@@ -229,10 +224,6 @@ class Config:
         """网络错误重试间隔秒数（默认30秒）"""
         return self._config.get("agent", {}).get("network_retry_interval_seconds", 30)
 
-    @property
-    def thinking_enabled(self) -> bool:
-        return self._config.get("agent", {}).get("thinking_enabled", True)
-
     # Display Configuration
     @property
     def show_thinking(self) -> bool:
@@ -243,24 +234,33 @@ class Config:
         return self._config.get("display", {}).get("thinking_indicator", "思考中")
 
     # System Prompt
-    @property
-    def system_prompt_path(self) -> str:
-        return self._config.get("system_prompt", {}).get("path", "./prompts/systsc.md")
-
     def get_system_prompt(self) -> str:
-        """Read system prompt from file with caching. Appends autonomous instructions if enabled."""
+        """Build complete system prompt from section files.
+
+        Assembles: intro + rules + doing_tasks + tool_usage +
+        tone_style + output_efficiency + autonomous_instructions.
+        Result is cached per session.
+        """
         if not hasattr(self, "_system_prompt_cache"):
             self._system_prompt_cache: Optional[str] = None
-        if self._system_prompt_cache is None:
-            try:
-                path = resolve_path(self.system_prompt_path.removeprefix("./"))
-                self._system_prompt_cache = path.read_text(encoding="utf-8")
-            except Exception:
-                self._system_prompt_cache = "You are a helpful AI assistant."
-        logger.debug(f"System prompt loaded from {self.system_prompt_path}")
-        base = self._system_prompt_cache
-        base += "\n\n" + self.autonomous_instructions_prompt
-        return base
+        if self._system_prompt_cache is not None:
+            return self._system_prompt_cache
+
+        sections = []
+        for key in _SYSTEM_SECTIONS:
+            content = self._load_prompt(key, _SYSTEM_SECTION_DEFAULTS.get(key, ""))
+            sections.append(content)
+            logger.debug(f"System prompt section '{key}': {len(content)} chars")
+
+        # Append autonomous instructions
+        sections.append(self.autonomous_instructions_prompt)
+
+        self._system_prompt_cache = "\n\n".join(sections)
+        logger.info(
+            f"System prompt assembled: {len(sections)} sections, "
+            f"{len(self._system_prompt_cache)} chars"
+        )
+        return self._system_prompt_cache
 
     # Tools Configuration
     @property
@@ -275,13 +275,6 @@ class Config:
     @property
     def mcp_servers(self) -> List[Dict[str, Any]]:
         return self._mcp_config.get("servers", [])
-
-    def get_mcp_server(self, name: str) -> Optional[Dict[str, Any]]:
-        """Get MCP server configuration by name"""
-        for server in self.mcp_servers:
-            if server.get("name") == name:
-                return server
-        return None
 
     # Logs Configuration
     @property
@@ -324,6 +317,7 @@ class Config:
             path = resolve_path(path_str.removeprefix("./"))
             content = path.read_text(encoding="utf-8").strip()
             setattr(self, cache_key, content)
+            logger.debug(f"Loaded prompt '{key}' from {path_str}: {len(content)} chars")
             return content
         except Exception:
             logger.warning(f"Failed to load prompt {key} from {path_str}, using default")
@@ -355,11 +349,17 @@ class Config:
         return self._load_prompt("summary_system",
             "You are a summary generation expert.")
 
-    def get_summary_template(self) -> str:
-        """Read summary template, with placeholder support."""
+    def get_summary_prompt(self, messages_content: str) -> str:
+        """Build summary prompt with conversation content.
+
+        Args:
+            messages_content: Formatted conversation messages
+        Returns:
+            Complete summary prompt string
+        """
         template = self._load_prompt("summary_template",
-            "Please generate a concise summary for the following conversation:\n{messages}\n{requirements}")
-        return template
+            "Please generate a concise summary for the following conversation.")
+        return f"{template}\n\n{messages_content}"
 
     # Autonomous Configuration
     # Token Budget Nudge Configuration
@@ -368,11 +368,17 @@ class Config:
         """Token usage ratio threshold to inject nudge message (default 0.90)"""
         return self._config.get("agent", {}).get("nudge_threshold", 0.90)
 
-    @property
-    def nudge_prompt(self) -> str:
-        """Nudge message injected when token budget is near limit"""
-        return self._load_prompt("token_budget_nudge",
-            "Context at {pct:.0%}. Keep working — do not summarize.")
+    def get_nudge_prompt(self, usage_ratio: float) -> str:
+        """Build nudge prompt with current usage ratio.
+
+        Args:
+            usage_ratio: Current context usage ratio (0.0-1.0)
+        Returns:
+            Nudge message string
+        """
+        base = self._load_prompt("token_budget_nudge",
+            "Keep working — do not summarize.")
+        return f"Context at {usage_ratio:.0%}. {base}"
 
     # Autonomous Configuration
     @property
@@ -384,6 +390,17 @@ class Config:
     def tick_interval_minutes(self) -> int:
         """Tick interval in minutes for proactive wake-up (default 10)"""
         return self._config.get("autonomous", {}).get("tick_interval_minutes", 10)
+
+    # Skills Configuration
+    @property
+    def skills_enabled(self) -> bool:
+        """Whether the skill system is enabled (default True)"""
+        return self._config.get("skills", {}).get("enabled", True)
+
+    @property
+    def skill_dirs(self) -> list:
+        """Directories to scan for SKILL.md files (relative to project root)"""
+        return self._config.get("skills", {}).get("dirs", ["skills"])
 
 
 # Global config instance

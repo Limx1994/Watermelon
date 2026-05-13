@@ -6,7 +6,7 @@
 
 - **REPL 风格交互**：通过终端界面与 AI 对话
 - **工具系统**：所有工具通过 tools.json 配置为外部可执行文件（read_file、write_file、shell、grep、glob、edit）
-- **MCP 支持**：连接 Model Context Protocol 服务器（Tavily 搜索、Sequential Thinking 等）
+- **MCP 支持**：连接 Model Context Protocol 服务器（Sequential Thinking 等）
 - **鼠标交互**：鼠标滚轮滚动、文本选择、点击聚焦输入
 - **记忆持久化**：会话历史持久保存，长对话自动摘要
 - **中文输入**：优化中文语言输入体验，支持 IME
@@ -15,10 +15,21 @@
 - **Token 统计**：实时显示上传/下载/累计 Token，固定在底栏右下角
 - **自主模式**：持久化 Agent 循环，支持 tick 唤醒、proactive 指令、Sleep 工具空闲等待
 - **模型降级恢复**：主模型失败时自动切换备用模型，恢复后自动切回
+- **快速 Ctrl+C 取消**：重试期间可中断 sleep（0.2 秒响应），SIGINT handler 确保 agent 可靠取消
 - **标准 Cron 调度**：支持 5-field cron 表达式（via croniter），带抖动避免同时触发
 - **斜杠命令**：13 个内置命令（/help、/model、/save、/compact 等），支持 Tab 补全
+- **技能系统**：通过 SKILL.md 文件实现可扩展的 prompt 注入，支持 YAML frontmatter 配置、参数替换和工具过滤
 - **上下文进度条**：上下文使用率 >= 50% 时显示进度条，带颜色编码（绿/黄/橙/红）
-- **项目上下文注入**：自动将 CLAUDE.md 和 git status 注入每次 LLM 调用
+- **项目上下文注入**：自动将项目上下文和 git status 注入每次 LLM 调用
+
+## 前置条件
+
+- **Python** >= 3.10
+- **Windows**（见下方平台支持说明）
+
+### 平台支持
+
+本项目目前仅支持 **Windows**。所有外部工具均为 Windows `.exe` 可执行文件，shell 工具需要 PowerShell。
 
 ## 快速开始
 
@@ -27,7 +38,7 @@
 pip install -r requirements.txt
 ```
 
-2. 在 `config.json` 中配置 API 凭据（注意：`config.json` 和 `config/` 已被 .gitignore 排除以保护安全）：
+2. 在 `config.json` 中配置 API 凭据（注意：`config.json` 已被 .gitignore 排除以保护安全；`config/` 包含非敏感的工具/MCP 定义，受版本控制）：
 ```json
 {
   "openai": {
@@ -41,6 +52,8 @@ pip install -r requirements.txt
 3. 运行：
 ```bash
 python -m src.main
+# 或
+python -m src
 ```
 
 ## 依赖项
@@ -51,7 +64,6 @@ python -m src.main
 | [openai](https://github.com/openai/openai-python) | 1.109.1 | 兼容 OpenAI 协议的 LLM 客户端（DeepSeek API） |
 | [pyperclip](https://github.com/asweigart/pyperclip) | 1.11.0 | Windows 剪贴板集成 |
 | [requests](https://github.com/psf/requests) | 2.33.1 | HTTP 客户端（MCP/HTTP 客户端） |
-| [tavily-python](https://github.com/tavily-ai/tavily-python) | 0.7.24 | Tavily 网页搜索 MCP 客户端 |
 | [tiktoken](https://github.com/openai/tiktoken) | 0.12.0 | Token 计数 |
 | [croniter](https://github.com/kiorky/croniter) | 6.0.0 | 标准 5-field cron 表达式解析 |
 
@@ -66,7 +78,7 @@ AGImyCLI/
 │   ├── config.py            # 配置管理
 │   ├── memory.py            # 记忆和对话历史
 │   ├── llm/
-│   │   └── client.py        # LLM 客户端（兼容 DeepSeek API）
+│   │   └── client.py        # LLM 客户端（兼容 DeepSeek API，可中断 sleep）
 │   ├── tools/
 │   │   ├── base.py          # 工具基类和 ToolResult
 │   │   ├── registry.py      # 工具注册表（单例模式）
@@ -84,13 +96,18 @@ AGImyCLI/
 │   │   ├── base.py          # 抽象 MCP 客户端基类
 │   │   ├── protocol.py      # JSON-RPC 2.0 协议
 │   │   ├── client.py        # MCP 客户端工厂（create_mcp_client）
-│   │   ├── server.py        # MCP 服务器（暴露内置工具）
 │   │   ├── manager.py       # MCP 客户端管理器
 │   │   ├── index.py         # 工具名到客户端的索引
 │   │   ├── persistence.py   # MCP 数据持久化
 │   │   ├── stdio_client.py  # 基于 Stdio 的 MCP 客户端
-│   │   ├── http_client.py   # 基于 HTTP 的 MCP 客户端
-│   │   └── tavily_client.py # Tavily MCP 客户端
+│   │   └── http_client.py   # 基于 HTTP 的 MCP 客户端
+│   ├── skills/
+│   │   ├── __init__.py      # 技能系统初始化（init_skills）
+│   │   ├── definition.py    # SkillDefinition 数据类
+│   │   ├── loader.py        # SKILL.md 解析和加载器
+│   │   ├── registry.py      # SkillRegistry 单例
+│   │   ├── commands.py      # 技能执行处理器 + /skills 命令
+│   │   └── tool.py          # SkillTool（LLM 可调用的技能工具）
 │   └── utils/
 │       ├── path.py          # 路径工具函数
 │       ├── token_counter.py # Token 计数
@@ -102,19 +119,32 @@ AGImyCLI/
 │   ├── grep/                # 内容搜索工具
 │   ├── glob/                 # 文件模式匹配工具
 │   └── edit/                 # 字符串替换工具
+├── skills/                   # 技能定义（SKILL.md 文件）
+│   └── code-review/         # 示例：代码审查技能
+│       └── SKILL.md
 ├── prompts/                 # 提示词模板
-│   ├── systsc.md                # 系统提示词
-│   ├── compact_prompt.md        # 压缩提示词模板
-│   ├── autonomous_instructions.md  # 自主模式行为指令
-│   ├── compact_resume.md           # 压缩后续接
-│   ├── max_tokens_recovery.md      # 输出截断恢复
-│   ├── context_too_long.md         # 上下文过长恢复
-│   ├── token_budget_nudge.md       # Token 预算警告
-│   ├── summary_system.md           # 摘要生成系统提示
-│   └── summary_template.md         # 摘要模板
+│   ├── system/              # 系统提示词（6 个文件）
+│   │   ├── intro.md
+│   │   ├── system_rules.md
+│   │   ├── doing_tasks.md
+│   │   ├── tool_usage.md
+│   │   ├── tone_style.md
+│   │   └── output_efficiency.md
+│   ├── service/             # 服务提示词
+│   │   ├── compact_prompt.md
+│   │   ├── compact_resume.md
+│   │   ├── summary_system.md
+│   │   └── summary_template.md
+│   ├── recovery/            # 恢复提示词
+│   │   ├── max_tokens_recovery.md
+│   │   ├── context_too_long.md
+│   │   └── token_budget_nudge.md
+│   └── autonomous/
+│       └── instructions.md  # 自主模式行为指令
 ├── memory/                  # 对话存储
 │   ├── conversation.json    # 当前会话历史
 │   └── history/             # 归档会话
+├── mcpdata/                 # MCP 持久化数据
 ├── logs/                    # 日志文件
 ├── config/                  # 配置文件
 │   ├── mcp.json                 # MCP 服务器配置
@@ -122,8 +152,6 @@ AGImyCLI/
 │   └── scheduled_tasks.json     # Cron 任务状态（自动生成）
 ├── config.json              # 应用配置
 ├── requirements.txt         # Python 依赖
-├── CLAUDE.md                # 项目说明（英文）
-├── CLAUDE_zh.md            # 项目说明（中文）
 ├── README.md                # 说明文档（英文）
 ├── README_zh.md            # 本文件
 └── LICENSE                  # 许可证文件
@@ -138,45 +166,44 @@ AGImyCLI/
 | `openai` | `api_key` | API 密钥 | - |
 | | `base_url` | API 地址 | `https://api.deepseek.com` |
 | | `model` | 模型名称 | `deepseek-v4-flash` |
-| | `fallback_model` | 降级备用模型（空 = 禁用）。对象格式：`{"model": "gpt-4o", "base_url": "...", "api_key": "..."}` — 三字段必填 | `""` |
+| | `fallback_model` | 降级备用模型（空 = 禁用） | `""` |
 | | `temperature` | 采样温度 | `0.7` |
 | | `top_p` | 核采样参数 | `0.7` |
 | | `reasoning_effort` | 思考深度 | `max` |
-| | `context_window` | 最大上下文窗口（单位为千，如 128 = 128K；>= 1000 按原始 token 数计算）。有效上下文窗口 = `context_window - max_output_tokens` | `128` |
+| | `context_window` | 最大上下文窗口（单位为千，如 128 = 128K；>= 1000 按原始 token 数计算）。有效上下文窗口 = `context_window - max_output_tokens`。代码回退默认值：64K | `128` |
 | | `max_output_tokens` | 最大输出 Token 数 | `20000` |
 | `agent` | `max_turns` | 最大对话轮次 | `50` |
 | | `max_retries` | 失败最大重试次数 | `3` |
-| | `retry_interval_seconds` | 失败重试间隔（秒） | `60` |
 | | `network_max_retries` | 网络错误最大重试次数 | `10` |
 | | `network_retry_interval_seconds` | 网络错误重试间隔（秒） | `30` |
-| | `memory_threshold` | 触发自动摘要的轮次 | `20` |
-| | `thinking_enabled` | 启用思考模式 | `true` |
 | | `nudge_threshold` | Token 预算警告触发比例（0.0-1.0） | `0.90` |
 | `display` | `show_thinking` | 显示思考过程 | `true` |
 | | `thinking_indicator` | 思考指示器文字 | `思考中` |
-| `system_prompt` | `path` | 系统提示词文件路径 | `./prompts/systsc.md` |
 | `tools` | `enabled` | 启用的外部工具列表（在 tools.json 中配置） | `["shell", "read_file", "write_file", "grep", "glob", "edit"]` |
-| `memory` | `path` | 对话存储路径 | `./memory/conversation.json` |
-| | `auto_summary` | 长历史自动摘要 | `true` |
 | `logs` | `path` | 日志文件路径 | `./logs/agent.log` |
 | | `level` | 日志级别 | `INFO` |
 | | `max_bytes` | 单个日志文件最大字节数（轮转前） | `10485760`（10MB） |
 | | `backup_count` | 日志备份数量 | `5` |
-| `prompts` | `autonomous_instructions` | 自主模式指令文件路径 | `./prompts/autonomous_instructions.md` |
-| | `compact_resume` | 压缩恢复提示词路径 | `./prompts/compact_resume.md` |
-| | `max_tokens_recovery` | 输出截断恢复提示词路径 | `./prompts/max_tokens_recovery.md` |
-| | `context_too_long` | 上下文过长恢复提示词路径 | `./prompts/context_too_long.md` |
-| | `token_budget_nudge` | Token 预算警告提示词路径 | `./prompts/token_budget_nudge.md` |
-| | `summary_system` | 摘要系统提示词路径 | `./prompts/summary_system.md` |
-| | `summary_template` | 摘要模板路径 | `./prompts/summary_template.md` |
-| | `compact_prompt` | 压缩提示词路径 | `./prompts/compact_prompt.md` |
+| `prompts` | `autonomous_instructions` | 自主模式指令文件路径 | `./prompts/autonomous/instructions.md` |
+| | `compact_resume` | 压缩恢复提示词路径 | `./prompts/service/compact_resume.md` |
+| | `max_tokens_recovery` | 输出截断恢复提示词路径 | `./prompts/recovery/max_tokens_recovery.md` |
+| | `context_too_long` | 上下文过长恢复提示词路径 | `./prompts/recovery/context_too_long.md` |
+| | `token_budget_nudge` | Token 预算警告提示词路径 | `./prompts/recovery/token_budget_nudge.md` |
+| | `summary_system` | 摘要系统提示词路径 | `./prompts/service/summary_system.md` |
+| | `summary_template` | 摘要模板路径 | `./prompts/service/summary_template.md` |
+| | `compact_prompt` | 压缩提示词路径 | `./prompts/service/compact_prompt.md` |
+| | `system_intro` | 系统提示词 intro 段落路径 | `./prompts/system/intro.md` |
+| | `system_rules` | 系统规则路径 | `./prompts/system/system_rules.md` |
+| | `system_doing_tasks` | 任务执行指南路径 | `./prompts/system/doing_tasks.md` |
+| | `system_tool_usage` | 工具使用规则路径 | `./prompts/system/tool_usage.md` |
+| | `system_tone_style` | 语气风格指南路径 | `./prompts/system/tone_style.md` |
+| | `system_output_efficiency` | 输出效率规则路径 | `./prompts/system/output_efficiency.md` |
 
 ### compact — 上下文压缩设置
 
 | 配置项 | 键 | 说明 | 默认值 |
 |--------|-----|------|--------|
 | `compact` | `enabled` | 启用上下文压缩 | `true` |
-| | `prompt_path` | 压缩提示词模板路径 | `./prompts/compact_prompt.md` |
 | | `buffer_tokens` | 压缩后目标缓冲区大小 | `13000` |
 | | `micro_compact_streak` | 微型压缩触发连续数 | `3` |
 | | `micro_compact_gap_minutes` | 微型压缩时间间隔（分钟） | `5` |
@@ -190,6 +217,8 @@ AGImyCLI/
 |--------|-----|------|--------|
 | `autonomous` | `tick_interval_minutes` | Tick 唤醒间隔（分钟） | `10` |
 | | `cron_tasks` | 定时任务定义列表 | `[]` |
+| `skills` | `enabled` | 启用技能系统 | `true` |
+| | `dirs` | 扫描 SKILL.md 文件的目录列表（相对于项目根目录） | `["skills"]` |
 
 #### Cron 任务格式
 
@@ -210,11 +239,22 @@ AGImyCLI/
 
 ### Prompts — 提示词模板系统
 
-`prompts` 配置段将逻辑名称映射到 `.md` 文件路径：
+`prompts` 配置段将逻辑名称映射到 `.md` 文件路径。系统提示词由 6 个段落文件组装而成：
 
 | 模板 | 用途 |
 |------|------|
-| `autonomous_instructions` | 注入系统提示词，定义自主模式行为指令 |
+| `system_intro` | Agent 身份和角色定义 |
+| `system_rules` | 系统行为规则 |
+| `system_doing_tasks` | 任务执行指南 |
+| `system_tool_usage` | 工具使用规则 |
+| `system_tone_style` | 语气风格指南 |
+| `system_output_efficiency` | 输出效率规则 |
+| `autonomous_instructions` | 自主模式行为指令（追加到系统提示词） |
+
+服务和恢复提示词：
+
+| 模板 | 用途 |
+|------|------|
 | `compact_resume` | 上下文压缩后发送，指示 AI 继续工作而非等待输入 |
 | `max_tokens_recovery` | 输出达到 token 上限时的恢复提示 |
 | `context_too_long` | 上下文窗口溢出时的恢复提示 |
@@ -310,8 +350,8 @@ AGImyCLI/
 ## Token 消耗统计
 
 Token 消耗显示在屏幕底部（独立行，靠右对齐）：
-- `⬆`：上传 Token（系统提示词 + 记忆 + 用户输入）
-- `⬇`：下载 Token（思考过程 + 回复）
+- `⬆`：上传 Token（系统提示词 + 记忆）
+- `⬇`：下载 Token（思考过程）
 - `∫`：累计总 Token
 
 Token 计算规则：
@@ -326,13 +366,14 @@ Token 计算规则：
 | `Enter` | 发送所有内容（支持多行） |
 | `Ctrl+J` | 插入换行符 |
 | `Left` / `Right` | 光标移动（跨行导航） |
-| `Up` / `Down` | 输入历史 / 输出滚动（取决于焦点区域） |
+| `Up` / `Down` | 输入历史 |
+| `Ctrl+V` | 从剪贴板粘贴 |
 | `PageUp` / `PageDown` | 大步滚动 |
 | `Ctrl+Up` / `Ctrl+Down` | 单行滚动 |
 | `Home` / `End` | 跳转到开头/末尾 |
-| `Ctrl+C` | 复制选中文本（如有选中文本）/ 退出（若无选中文本） |
+| `Ctrl+C` | 复制选中文本 / 取消 agent 或退出 |
 | `Ctrl+Q` | 退出 |
-| `Ctrl+L` | 清屏并清空记忆 |
+| `Ctrl+L` | 清屏 |
 | `Tab` | 补全斜杠命令名称（输入以 / 开头时） |
 
 ## 斜杠命令
@@ -351,9 +392,99 @@ Token 计算规则：
 | `/memory [count]` | 显示最近记忆内容 |
 | `/compact` | 手动触发上下文压缩 |
 | `/mcp` | 显示 MCP 服务器状态 |
-| `/tools` | 列出可用工具 |
+| `/tools` | 列出可用工具（已配置 + 内置） |
 | `/system` | 显示系统提示词 |
 | `/version` | 显示版本信息 |
+| `/skills` | 列出所有可用技能 |
+
+## 技能系统
+
+技能是可扩展的 prompt 注入机制。每个技能是一个 Markdown 文件（`SKILL.md`），包含 YAML frontmatter 定义元数据和 markdown 正文。通过 `/skill-name` 触发时，技能的指令被注入到对话上下文中，指导模型执行特定任务。
+
+### 创建技能
+
+1. 在项目根目录的 `skills/` 下创建目录：
+```
+skills/
+  my-skill/
+    SKILL.md
+```
+
+2. 编写 `SKILL.md` 文件，包含 YAML frontmatter 和 markdown 正文：
+
+```markdown
+---
+name: my-skill
+description: 技能功能描述
+allowed-tools:
+  - read_file
+  - grep
+  - shell
+when_to_use: "当用户想要...时使用"
+argument-hint: "[file-pattern]"
+arguments:
+  - file-pattern
+user-invocable: true
+context: inline
+---
+
+# 技能名称
+
+## 输入
+- `$file-pattern`: 输入参数说明
+
+## 目标
+技能要完成的任务。
+
+## 步骤
+
+### 1. 第一步
+第一步的说明。
+
+### 2. 第二步
+第二步的说明。
+```
+
+### SKILL.md Frontmatter 字段
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `name` | string | 目录名 | 唯一标识符（映射 `/name`） |
+| `description` | string | - | 简短描述，用于帮助文本 |
+| `allowed-tools` | list | `[]`（所有工具） | 技能允许使用的工具 |
+| `when_to_use` | string | - | 触发条件说明（供模型参考） |
+| `argument-hint` | string | - | 参数提示，如 `"[file]"` |
+| `arguments` | list | `[]` | 命名参数占位符列表 |
+| `user-invocable` | boolean | `true` | 是否允许用户通过 `/name` 调用 |
+| `context` | string | `"inline"` | 执行模式（目前仅支持 `"inline"`） |
+| `model` | string | - | 可选模型覆盖 |
+| `effort` | string | - | 可选思考努力级别覆盖 |
+| `paths` | list | `[]` | 条件激活的 glob 模式 |
+
+### 使用技能
+
+- 输入 `/skill-name` 触发技能
+- 输入 `/skills` 列出所有可用技能
+- Tab 补全支持技能名称
+- 技能会出现在 `/help` 输出中
+
+### 参数替换
+
+在 markdown 正文中使用 `$argument-name` 占位符。触发技能时，用户输入的位置参数会替换这些占位符：
+
+```
+/code-review src/main.py
+```
+
+如果技能定义了 `arguments: [file-pattern]`，则正文中的 `$file-pattern` 会被替换为 `src/main.py`。
+
+### 工具过滤
+
+当技能指定了 `allowed-tools` 时，技能执行期间只有这些工具可用。这防止模型使用技能范围外的工具。
+
+### 示例：代码审查技能
+
+参见 `skills/code-review/SKILL.md`，这是一个完整的示例，使用 git diff 审查代码变更并提供反馈。
 
 ## 自主工作流程
 

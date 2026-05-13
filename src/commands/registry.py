@@ -37,11 +37,5 @@ class CommandRegistry:
     def list_commands(self) -> List[SlashCommand]:
         return sorted(self._commands.values(), key=lambda c: c.name)
 
-    def get_names(self) -> List[str]:
-        return sorted(self._commands.keys())
-
-    def has(self, name: str) -> bool:
-        return name in self._commands
-
 
 command_registry = CommandRegistry()

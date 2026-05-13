@@ -1,7 +1,7 @@
-import json
+"""Token counting utilities — tiktoken with estimation fallback"""
+
 import logging
 import re
-from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +46,7 @@ def count_tokens(text: str) -> float:
         try:
             return float(len(encoder.encode(text)))
         except Exception:
-            pass  # 回退到估算
+            logger.debug("tiktoken encode failed, using estimation fallback")
 
     # 估算规则
     chinese = len(_CHINESE_RE.findall(text))
@@ -57,38 +57,3 @@ def count_tokens(text: str) -> float:
     other = len(text) - classified
 
     return chinese * 1.3 + english * 1.1 + (punctuation + digits + other) * 1.0
-
-
-def count_messages_tokens(messages: List[Dict[str, Any]], system_prompt: str) -> Dict[str, int]:
-    """计算消息列表的总 token 数
-
-    Args:
-        messages: 消息列表
-        system_prompt: 系统提示词
-
-    Returns:
-        包含各部分 token 数的字典
-    """
-    total = count_tokens(system_prompt)
-    details = {"system": count_tokens(system_prompt)}
-
-    for msg in messages:
-        role = msg.get("role", "unknown")
-        content = msg.get("content", "") or ""
-        tool_calls = msg.get("tool_calls", [])
-
-        msg_tokens = count_tokens(content)
-
-        # tool_calls 的 arguments 也消耗 token
-        for tc in tool_calls:
-            if isinstance(tc, dict):
-                args = tc.get("arguments", "")
-                if isinstance(args, str):
-                    args = json.loads(args) if args else {}
-                msg_tokens += count_tokens(json.dumps(args))
-
-        total += msg_tokens
-        details[role] = details.get(role, 0) + msg_tokens
-
-    details["total"] = total
-    return details

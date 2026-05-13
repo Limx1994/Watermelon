@@ -6,7 +6,7 @@ A TUI (Text User Interface) AGI interaction tool inspired by Claude Code, built 
 
 - **REPL-style interaction**: Chat with AI through a terminal interface
 - **Tool system**: All tools configured as external executables via tools.json (read_file, write_file, shell, grep, glob, edit)
-- **MCP support**: Connect to Model Context Protocol servers (Tavily search, Sequential Thinking, etc.)
+- **MCP support**: Connect to Model Context Protocol servers (Sequential Thinking, etc.)
 - **Mouse interaction**: Mouse wheel scrolling, text selection, click-to-focus input
 - **Memory persistence**: Conversation history saved between sessions, auto-summary for long conversations
 - **Chinese input**: Optimized for Chinese language input with IME support
@@ -15,10 +15,21 @@ A TUI (Text User Interface) AGI interaction tool inspired by Claude Code, built 
 - **Token statistics**: Live token consumption displayed at bottom-right (upload/download/cumulative)
 - **Autonomous mode**: Persistent agent loop with tick-based wake-up, proactive instructions, and Sleep tool for idle waiting
 - **Model degradation recovery**: Auto-switch to fallback model on failure, auto-restore on success
+- **Fast Ctrl+C cancellation**: Interruptible sleep during retries (0.2s response), SIGINT handler for reliable agent cancellation
 - **Standard cron scheduling**: 5-field cron expressions via croniter, with jitter to avoid simultaneous triggers
 - **Slash commands**: 13 built-in commands (/help, /model, /save, /compact, etc.) with Tab completion
+- **Skill system**: Extensible prompt injection via SKILL.md files with YAML frontmatter, argument substitution, and tool filtering
 - **Context usage bar**: Progress bar at >= 50% context usage with color coding (green/yellow/orange/red)
-- **Project context injection**: Automatically injects CLAUDE.md and git status into each LLM call
+- **Project context injection**: Automatically injects project context and git status into each LLM call
+
+## Prerequisites
+
+- **Python** >= 3.10
+- **Windows** (see Platform Support below)
+
+### Platform Support
+
+This project currently supports **Windows only**. All external tools are compiled as Windows `.exe` executables, and the shell tool requires PowerShell.
 
 ## Quick Start
 
@@ -35,11 +46,10 @@ pip install -r requirements.txt
 | [openai](https://github.com/openai/openai-python) | 1.109.1 | OpenAI-compatible LLM client (DeepSeek API) |
 | [pyperclip](https://github.com/asweigart/pyperclip) | 1.11.0 | Windows clipboard integration |
 | [requests](https://github.com/psf/requests) | 2.33.1 | HTTP client for MCP/HTTP clients |
-| [tavily-python](https://github.com/tavily-ai/tavily-python) | 0.7.24 | Tavily web search MCP client |
 | [tiktoken](https://github.com/openai/tiktoken) | 0.12.0 | Token counting |
 | [croniter](https://github.com/kiorky/croniter) | 6.0.0 | Standard 5-field cron expression parsing |
 
-2. Configure API credentials in `config.json` (note: `config.json` and `config/` are gitignored for security):
+2. Configure API credentials in `config.json` (note: `config.json` is gitignored for security; `config/` contains non-sensitive tool/MCP definitions and is tracked):
 ```json
 {
   "openai": {
@@ -53,6 +63,8 @@ pip install -r requirements.txt
 3. Run:
 ```bash
 python -m src.main
+# or
+python -m src
 ```
 
 ## Project Structure
@@ -66,7 +78,7 @@ AGImyCLI/
 │   ├── config.py            # Configuration management
 │   ├── memory.py            # Memory and conversation history
 │   ├── llm/
-│   │   └── client.py        # LLM client (DeepSeek API compatible)
+│   │   └── client.py        # LLM client (DeepSeek API compatible, interruptible sleep)
 │   ├── tools/
 │   │   ├── base.py          # Tool base class and ToolResult
 │   │   ├── registry.py      # Tool registry (singleton)
@@ -84,13 +96,18 @@ AGImyCLI/
 │   │   ├── base.py          # Abstract MCP client base class
 │   │   ├── protocol.py      # JSON-RPC 2.0 protocol
 │   │   ├── client.py        # MCP client factory (create_mcp_client)
-│   │   ├── server.py        # MCP server (expose built-in tools)
 │   │   ├── manager.py       # MCP client manager
 │   │   ├── index.py         # Tool name to client index
 │   │   ├── persistence.py   # MCP data persistence
 │   │   ├── stdio_client.py  # Stdio-based MCP client
-│   │   ├── http_client.py   # HTTP-based MCP client
-│   │   └── tavily_client.py # Tavily MCP client
+│   │   └── http_client.py   # HTTP-based MCP client
+│   ├── skills/
+│   │   ├── __init__.py      # Skill system init (init_skills)
+│   │   ├── definition.py    # SkillDefinition dataclass
+│   │   ├── loader.py        # SKILL.md parser and loader
+│   │   ├── registry.py      # SkillRegistry singleton
+│   │   ├── commands.py      # Skill execution handler + /skills command
+│   │   └── tool.py          # SkillTool (LLM-invokable skill tool)
 │   └── utils/
 │       ├── path.py          # Path utilities
 │       ├── token_counter.py  # Token counting
@@ -102,19 +119,32 @@ AGImyCLI/
 │   ├── grep/                # Content search tool
 │   ├── glob/                 # File pattern matching tool
 │   └── edit/                 # String replacement tool
+├── skills/                   # Skill definitions (SKILL.md files)
+│   └── code-review/         # Example: code review skill
+│       └── SKILL.md
 ├── prompts/                 # Prompt templates
-│   ├── systsc.md                # System prompt
-│   ├── compact_prompt.md        # Compact prompt template
-│   ├── autonomous_instructions.md  # Autonomous mode behavior
-│   ├── compact_resume.md           # Post-compaction resume
-│   ├── max_tokens_recovery.md      # Output truncation recovery
-│   ├── context_too_long.md         # Context overflow recovery
-│   ├── token_budget_nudge.md       # Token budget nudge
-│   ├── summary_system.md           # Summary generation system prompt
-│   └── summary_template.md         # Summary template
+│   ├── system/              # System prompt sections
+│   │   ├── intro.md
+│   │   ├── system_rules.md
+│   │   ├── doing_tasks.md
+│   │   ├── tool_usage.md
+│   │   ├── tone_style.md
+│   │   └── output_efficiency.md
+│   ├── service/             # Service prompts
+│   │   ├── compact_prompt.md
+│   │   ├── compact_resume.md
+│   │   ├── summary_system.md
+│   │   └── summary_template.md
+│   ├── recovery/            # Recovery prompts
+│   │   ├── max_tokens_recovery.md
+│   │   ├── context_too_long.md
+│   │   └── token_budget_nudge.md
+│   └── autonomous/
+│       └── instructions.md  # Autonomous mode behavior
 ├── memory/                  # Conversation storage
 │   ├── conversation.json    # Current session history
 │   └── history/             # Archived sessions
+├── mcpdata/                 # MCP persistence data
 ├── logs/                    # Log files
 ├── config/                  # Configuration files
 │   ├── mcp.json                 # MCP server configuration
@@ -122,8 +152,6 @@ AGImyCLI/
 │   └── scheduled_tasks.json     # Cron task state (auto-generated)
 ├── config.json              # Application configuration
 ├── requirements.txt         # Python dependencies
-├── CLAUDE.md                # Project instructions (EN)
-├── CLAUDE_zh.md            # Project instructions (ZH)
 ├── README.md                # This file
 ├── README_zh.md            # Readme (Chinese)
 └── LICENSE                  # License file
@@ -138,45 +166,44 @@ AGImyCLI/
 | `openai` | `api_key` | API key | - |
 | | `base_url` | API base URL | `https://api.deepseek.com` |
 | | `model` | Model name | `deepseek-v4-flash` |
-| | `fallback_model` | Fallback model for degradation recovery (empty = disabled). Object: `{"model": "gpt-4o", "base_url": "...", "api_key": "..."}` — all three fields required | `""` |
+| | `fallback_model` | Fallback model for degradation recovery (empty = disabled) | `""` |
 | | `temperature` | Sampling temperature | `0.7` |
 | | `top_p` | Nucleus sampling | `0.7` |
 | | `reasoning_effort` | Reasoning depth | `max` |
-| | `context_window` | Max context window (in thousands, e.g. 128 = 128K; values >= 1000 treated as raw tokens). Effective context = `context_window - max_output_tokens` | `128` |
+| | `context_window` | Max context window (in thousands, e.g. 128 = 128K; values >= 1000 treated as raw tokens). Effective context = `context_window - max_output_tokens`. Code fallback default: 64K | `128` |
 | | `max_output_tokens` | Max output tokens | `20000` |
 | `agent` | `max_turns` | Max conversation turns | `50` |
 | | `max_retries` | Max retry count on failure | `3` |
-| | `retry_interval_seconds` | Retry interval in seconds | `60` |
 | | `network_max_retries` | Max retry count for network errors | `10` |
 | | `network_retry_interval_seconds` | Network error retry interval in seconds | `30` |
-| | `memory_threshold` | Turns before auto-summary | `20` |
-| | `thinking_enabled` | Enable thinking mode | `true` |
 | | `nudge_threshold` | Token usage ratio to inject nudge message (0.0-1.0) | `0.90` |
 | `display` | `show_thinking` | Show thinking process | `true` |
 | | `thinking_indicator` | Thinking indicator text | `思考中` |
-| `system_prompt` | `path` | Path to system prompt file | `./prompts/systsc.md` |
 | `tools` | `enabled` | List of enabled external tools (configured in tools.json) | `["shell", "read_file", "write_file", "grep", "glob", "edit"]` |
-| `memory` | `path` | Conversation storage path | `./memory/conversation.json` |
-| | `auto_summary` | Auto-summarize long history | `true` |
 | `logs` | `path` | Log file path | `./logs/agent.log` |
 | | `level` | Log level | `INFO` |
 | | `max_bytes` | Max size per log file before rotation | `10485760` (10MB) |
 | | `backup_count` | Number of backup log files to keep | `5` |
-| `prompts` | `autonomous_instructions` | Path to autonomous mode instructions | `./prompts/autonomous_instructions.md` |
-| | `compact_resume` | Path to post-compaction resume prompt | `./prompts/compact_resume.md` |
-| | `max_tokens_recovery` | Path to output truncation recovery prompt | `./prompts/max_tokens_recovery.md` |
-| | `context_too_long` | Path to context overflow recovery prompt | `./prompts/context_too_long.md` |
-| | `token_budget_nudge` | Path to token budget nudge prompt | `./prompts/token_budget_nudge.md` |
-| | `summary_system` | Path to summary system prompt | `./prompts/summary_system.md` |
-| | `summary_template` | Path to summary template | `./prompts/summary_template.md` |
-| | `compact_prompt` | Path to compact prompt template | `./prompts/compact_prompt.md` |
+| `prompts` | `autonomous_instructions` | Path to autonomous mode instructions | `./prompts/autonomous/instructions.md` |
+| | `compact_resume` | Path to post-compaction resume prompt | `./prompts/service/compact_resume.md` |
+| | `max_tokens_recovery` | Path to output truncation recovery prompt | `./prompts/recovery/max_tokens_recovery.md` |
+| | `context_too_long` | Path to context overflow recovery prompt | `./prompts/recovery/context_too_long.md` |
+| | `token_budget_nudge` | Path to token budget nudge prompt | `./prompts/recovery/token_budget_nudge.md` |
+| | `summary_system` | Path to summary system prompt | `./prompts/service/summary_system.md` |
+| | `summary_template` | Path to summary template | `./prompts/service/summary_template.md` |
+| | `compact_prompt` | Path to compact prompt template | `./prompts/service/compact_prompt.md` |
+| | `system_intro` | Path to system prompt intro section | `./prompts/system/intro.md` |
+| | `system_rules` | Path to system rules section | `./prompts/system/system_rules.md` |
+| | `system_doing_tasks` | Path to task execution guidelines | `./prompts/system/doing_tasks.md` |
+| | `system_tool_usage` | Path to tool usage rules | `./prompts/system/tool_usage.md` |
+| | `system_tone_style` | Path to tone/style guidelines | `./prompts/system/tone_style.md` |
+| | `system_output_efficiency` | Path to output efficiency rules | `./prompts/system/output_efficiency.md` |
 
 ### compact — Context Compression Settings
 
 | Section | Key | Description | Default |
 |---------|-----|-------------|---------|
 | `compact` | `enabled` | Enable context compression | `true` |
-| | `prompt_path` | Path to compact prompt template | `./prompts/compact_prompt.md` |
 | | `buffer_tokens` | Target buffer size after compression | `13000` |
 | | `micro_compact_streak` | Streak threshold for micro compression | `3` |
 | | `micro_compact_gap_minutes` | Gap minutes for micro compression | `5` |
@@ -190,6 +217,8 @@ AGImyCLI/
 |---------|-----|-------------|---------|
 | `autonomous` | `tick_interval_minutes` | Tick interval for proactive wake-up (minutes) | `10` |
 | | `cron_tasks` | List of cron task definitions | `[]` |
+| `skills` | `enabled` | Enable the skill system | `true` |
+| | `dirs` | Directories to scan for SKILL.md files (relative to project root) | `["skills"]` |
 
 #### Cron Task Format
 
@@ -210,11 +239,22 @@ Each task in the `cron_tasks` list follows this format:
 
 ### Prompts — Prompt Template System
 
-The `prompts` config section maps logical names to `.md` file paths:
+The `prompts` config section maps logical names to `.md` file paths. The system prompt is assembled from 6 section files:
 
 | Template | Purpose |
 |----------|---------|
-| `autonomous_instructions` | Behavior directives injected into system prompt for autonomous mode |
+| `system_intro` | Agent identity and role definition |
+| `system_rules` | System behavior rules |
+| `system_doing_tasks` | Task execution guidelines |
+| `system_tool_usage` | Tool usage rules and conventions |
+| `system_tone_style` | Tone and style guidelines |
+| `system_output_efficiency` | Output conciseness rules |
+| `autonomous_instructions` | Behavior directives for autonomous mode (appended to system prompt) |
+
+Service and recovery prompts:
+
+| Template | Purpose |
+|----------|---------|
 | `compact_resume` | Message sent after context compression to resume work |
 | `max_tokens_recovery` | Recovery prompt when output hits token limit |
 | `context_too_long` | Recovery prompt when context window is exceeded |
@@ -310,8 +350,8 @@ Path support:
 ## Token Statistics
 
 Token consumption is displayed at the bottom of the screen (independent row, right-aligned):
-- `⬆`: Upload tokens (system prompt + memory + user input)
-- `⬇`: Download tokens (reasoning + response)
+- `⬆`: Upload tokens (system prompt + memory)
+- `⬇`: Download tokens (reasoning)
 - `∫`: Cumulative total
 
 Token calculation rules:
@@ -326,13 +366,14 @@ Token calculation rules:
 | `Enter` | Send all content (multiline support) |
 | `Ctrl+J` | Insert newline |
 | `Left` / `Right` | Move cursor (cross-line navigation) |
-| `Up` / `Down` | Input history / Output scroll (depends on focus) |
+| `Up` / `Down` | Input history |
+| `Ctrl+V` | Paste from clipboard |
 | `PageUp` / `PageDown` | Large scroll step |
 | `Ctrl+Up` / `Ctrl+Down` | Single line scroll |
 | `Home` / `End` | Jump to start/end |
-| `Ctrl+C` | Copy selected text (if text selected) / Exit (if no selection) |
+| `Ctrl+C` | Copy selected text / Cancel agent or exit |
 | `Ctrl+Q` | Exit |
-| `Ctrl+L` | Clear screen and memory |
+| `Ctrl+L` | Clear screen |
 | `Tab` | Complete slash command name (when input starts with /) |
 
 ## Slash Commands
@@ -351,9 +392,99 @@ Type `/` followed by a command name to execute it. Press Tab for completion. Com
 | `/memory [count]` | Show recent memory |
 | `/compact` | Manually trigger context compression |
 | `/mcp` | Show MCP server status |
-| `/tools` | List available tools |
+| `/tools` | List available tools (configured + built-in) |
 | `/system` | Show system prompt |
 | `/version` | Show version info |
+| `/skills` | List all available skills |
+
+## Skill System
+
+Skills are extensible prompt injection mechanisms. Each skill is a Markdown file (`SKILL.md`) with YAML frontmatter that defines metadata and a prompt body. When triggered via `/skill-name`, the skill's instructions are injected into the conversation context, guiding the model to execute specific tasks.
+
+### Creating a Skill
+
+1. Create a directory under `skills/` (project root):
+```
+skills/
+  my-skill/
+    SKILL.md
+```
+
+2. Write the `SKILL.md` file with YAML frontmatter and markdown body:
+
+```markdown
+---
+name: my-skill
+description: Description of what this skill does
+allowed-tools:
+  - read_file
+  - grep
+  - shell
+when_to_use: "Use when the user wants to..."
+argument-hint: "[file-pattern]"
+arguments:
+  - file-pattern
+user-invocable: true
+context: inline
+---
+
+# Skill Name
+
+## Inputs
+- `$file-pattern`: Description of the input
+
+## Goal
+What this skill accomplishes.
+
+## Steps
+
+### 1. Step One
+Instructions for the first step.
+
+### 2. Step Two
+Instructions for the second step.
+```
+
+### SKILL.md Frontmatter Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | string | directory name | Unique identifier (maps to `/name`) |
+| `description` | string | - | Short description for help text |
+| `allowed-tools` | list | `[]` (all tools) | Tools this skill may use |
+| `when_to_use` | string | - | When to trigger (for model reference) |
+| `argument-hint` | string | - | Parameter hint, e.g. `"[file]"` |
+| `arguments` | list | `[]` | Named argument placeholders |
+| `user-invocable` | boolean | `true` | Whether user can call via `/name` |
+| `context` | string | `"inline"` | Execution mode (`"inline"` only) |
+| `model` | string | - | Optional model override |
+| `effort` | string | - | Optional reasoning effort override |
+| `paths` | list | `[]` | Conditional activation glob patterns |
+
+### Using Skills
+
+- Type `/skill-name` to invoke a skill
+- Type `/skills` to list all available skills
+- Tab completion works for skill names
+- Skills appear in `/help` output
+
+### Argument Substitution
+
+Use `$argument-name` placeholders in the markdown body. When the skill is invoked, positional arguments from the user input replace these placeholders:
+
+```
+/code-review src/main.py
+```
+
+If the skill defines `arguments: [file-pattern]`, then `$file-pattern` in the body is replaced with `src/main.py`.
+
+### Allowed Tools
+
+When a skill specifies `allowed-tools`, only those tools are available during skill execution. This prevents the model from using tools outside the skill's scope.
+
+### Example: Code Review Skill
+
+See `skills/code-review/SKILL.md` for a complete example that reviews code changes using git diff and provides feedback.
 
 ## Autonomous Workflow
 

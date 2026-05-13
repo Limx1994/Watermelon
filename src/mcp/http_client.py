@@ -2,6 +2,7 @@
 
 import json
 import logging
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
@@ -26,9 +27,9 @@ class HttpMCPClient(BaseMCPClient):
         self.timeout: int = server_config.get("timeout", 30)
         self._connected = False
         self._tools: List[Dict[str, Any]] = []
-        self._server_info: Dict[str, Any] = {}
         self._session_id: Optional[str] = None
         self._next_id: int = 0
+        self._id_lock: threading.Lock = threading.Lock()
 
         # Build headers with API key
         self._base_headers = {
@@ -62,7 +63,6 @@ class HttpMCPClient(BaseMCPClient):
                 request_id=self._next_request_id()
             )
             result = self._send_request(request, timeout=10, use_session=False)
-            self._server_info = result.get("serverInfo", {})
 
             # Send initialized notification
             notification = MCPProtocol.create_initialized_notification()
@@ -80,6 +80,7 @@ class HttpMCPClient(BaseMCPClient):
 
     def disconnect(self) -> None:
         """Disconnect from the MCP server."""
+        logger.info(f"MCP HTTP client '{self.name}' disconnected")
         self._connected = False
         self._session_id = None
         self._tools = []
@@ -102,15 +103,14 @@ class HttpMCPClient(BaseMCPClient):
             }
 
         try:
-            result = self._send_request({
-                "jsonrpc": "2.0",
-                "id": self._next_request_id(),
-                "method": "tools/call",
-                "params": {
-                    "name": tool_name,
-                    "arguments": arguments
-                }
-            }, timeout=self.timeout)
+            result = self._send_request(
+                MCPProtocol.create_request(
+                    "tools/call",
+                    {"name": tool_name, "arguments": arguments},
+                    self._next_request_id()
+                ),
+                timeout=self.timeout
+            )
 
             # Parse MCP content items
             content_items = result.get("content", [])
@@ -121,6 +121,7 @@ class HttpMCPClient(BaseMCPClient):
 
             content = "\n".join(text_parts)
             is_error = result.get("isError", False)
+            logger.debug(f"MCP HTTP call_tool: {tool_name} -> success={not is_error}, content={len(content)}B")
 
             return {
                 "success": not is_error,
@@ -184,6 +185,7 @@ class HttpMCPClient(BaseMCPClient):
                     err = result["error"]
                     raise Exception(f"MCP error {err.get('code')}: {err.get('message')}")
 
+                logger.debug(f"HTTP MCP request OK: method={request.get('method')}")
                 return result.get("result", {})
             except self._requests.RequestException as e:
                 # Don't retry client errors (4xx) - they won't succeed on retry
@@ -216,16 +218,15 @@ class HttpMCPClient(BaseMCPClient):
 
     def _discover_tools(self) -> None:
         """Discover available tools via tools/list."""
-        result = self._send_request({
-            "jsonrpc": "2.0",
-            "id": self._next_request_id(),
-            "method": "tools/list",
-            "params": {}
-        }, timeout=10)
+        result = self._send_request(
+            MCPProtocol.create_request("tools/list", request_id=self._next_request_id()),
+            timeout=10
+        )
         self._tools = result.get("tools", [])
         logger.info(f"MCP HTTP discovered {len(self._tools)} tools for '{self.name}'")
 
     def _next_request_id(self) -> int:
         """Get the next monotonically increasing request ID."""
-        self._next_id += 1
-        return self._next_id
+        with self._id_lock:
+            self._next_id += 1
+            return self._next_id

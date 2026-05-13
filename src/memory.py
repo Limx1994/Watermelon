@@ -42,7 +42,6 @@ class Memory:
     def _initialize(self) -> None:
         """Initialize memory - starts fresh, no historical loading"""
         self._history: List[Dict[str, Any]] = []
-        self._last_updated: Optional[str] = None
         self._session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         self._history_dir = get_project_root() / "memory" / "history"
         self._rw_lock = threading.RLock()
@@ -72,7 +71,7 @@ class Memory:
             logger.info(f"Saved session {self._session_id} to {filename} ({len(self._history)} messages)")
             return str(filepath)
         except Exception as e:
-            logger.error(f"Failed to save session: {e}")
+            logger.error(f"Failed to save session (session_id={self._session_id}): {e}")
             return ""
 
     def load_session(self, session_path: str) -> bool:
@@ -91,11 +90,10 @@ class Memory:
                 data = json.load(f)
                 self._history = data.get("history", [])
                 self._session_id = data.get("session_id", self._session_id)
-                self._last_updated = data.get("saved_at")
             logger.info(f"Loaded session {self._session_id} ({len(self._history)} messages)")
             return True
         except Exception as e:
-            logger.error(f"Failed to load session: {e}")
+            logger.error(f"Failed to load session (path={session_path}): {e}")
             return False
 
     def list_sessions(self) -> List[Dict[str, str]]:
@@ -121,10 +119,24 @@ class Memory:
                     continue
         except Exception as e:
             logger.warning(f"Failed to list sessions in {self._history_dir}: {e}")
+        logger.debug(f"Listed {len(sessions)} sessions")
         return sessions
 
-    def add_message(self, role: str, content: str, tool_calls: Optional[List[Dict]] = None) -> None:
-        """Add a message to current session history"""
+    def add_message(
+        self,
+        role: str,
+        content: str,
+        tool_calls: Optional[List[Dict]] = None,
+        reasoning_content: str = ""
+    ) -> None:
+        """Add a message to current session history.
+
+        Args:
+            role: Message role (user/assistant/system/tool)
+            content: Message content
+            tool_calls: Optional tool calls for assistant messages
+            reasoning_content: Optional reasoning content for thinking mode
+        """
         message = {
             "role": role,
             "content": content,
@@ -132,23 +144,11 @@ class Memory:
         }
         if tool_calls:
             message["tool_calls"] = tool_calls
+        if reasoning_content:
+            message["reasoning_content"] = reasoning_content
         with self._rw_lock:
             self._history.append(message)
-            self._last_updated = datetime.now().isoformat()
         logger.debug(f"Added {role} message, session has {len(self._history)} messages")
-
-    def add_tool_result(self, tool_call_id: str, tool_name: str, result: str) -> None:
-        """Add a tool execution result to current session"""
-        logger.debug(f"Adding tool result: {tool_name}, {len(result or '')} chars")
-        with self._rw_lock:
-            self._history.append({
-                "role": "tool",
-                "tool_call_id": tool_call_id,
-                "tool_name": tool_name,
-                "content": result,
-                "timestamp": datetime.now().isoformat()
-            })
-            self._last_updated = datetime.now().isoformat()
 
     def get_messages(self) -> List[Dict[str, Any]]:
         """Get current session conversation history"""
@@ -165,7 +165,6 @@ class Memory:
         with self._rw_lock:
             msg_count = len(self._history)
             self._history = []
-            self._last_updated = None
             self._session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         logger.info(f"Cleared {msg_count} messages, new session_id={self._session_id}")
 
@@ -187,6 +186,7 @@ class Memory:
                 })
             else:
                 result.append({k: v for k, v in m.items() if k in ("role", "content", "tool_calls", "tool_call_id", "reasoning_content")})
+        logger.debug(f"get_conversation_for_llm: {len(messages)} messages -> {len(result)} formatted")
         return result
 
 
@@ -238,15 +238,13 @@ class CompactEngine:
     def __init__(self, memory: "Memory"):
         logger.debug("CompactEngine initialized")
         self._memory = memory
-        self._compact_count = 0
-        self._last_compact_at: Optional[str] = None
         self._tool_call_streak = 0
         self._last_user_message_time: Optional[datetime] = None
-        self._pending_summary: Optional[str] = None
 
     def increment_streak(self) -> None:
         """增加工具调用连续计数"""
         self._tool_call_streak += 1
+        logger.debug(f"Tool call streak: {self._tool_call_streak}")
 
     def record_user_message(self) -> None:
         """记录用户消息，用于时间触发检测"""
@@ -296,8 +294,6 @@ class CompactEngine:
         Args:
             level: 压缩级别 (1=Micro, 2=Auto, 3=Full)
             llm_client: LLM 客户端（Auto/Full 级别需要）
-            level: 压缩级别 (1=Micro, 2=Auto, 3=Full)
-            llm_client: LLM 客户端（Auto/Full 级别需要）
 
         Returns:
             压缩结果字典
@@ -326,9 +322,9 @@ class CompactEngine:
             result.update(full_result)
 
         if result["compacted"]:
-            self._compact_count += 1
-            self._last_compact_at = datetime.now().isoformat()
-
+            logger.info(f"Compact done: level={result['level']}, "
+                        f"removed={result['messages_removed']}, "
+                        f"saved={result['tokens_saved']} tokens")
         return result
 
     def _micro_compact(self) -> Dict[str, Any]:
@@ -341,24 +337,25 @@ class CompactEngine:
 
         cleared = 0
         cleared_tokens = 0
-        tool_results = [
-            (i, m) for i, m in enumerate(self._memory._history)
-            if m.get("role") == "tool" and m.get("_cleared") is not True
-        ]
+        with self._memory._rw_lock:
+            tool_results = [
+                (i, m) for i, m in enumerate(self._memory._history)
+                if m.get("role") == "tool" and m.get("_cleared") is not True
+            ]
 
-        # 保留最近的 tool_results
-        keep_recent = MICRO_COMPACT_KEEP_COUNT
-        # 正确处理 keep_recent=0 的情况（Python 中 :-0 等于 :0，返回空列表）
-        if keep_recent > 0:
-            to_clear = tool_results[:-keep_recent]
-        else:
-            to_clear = tool_results[:] if tool_results else []
-        for i, msg in to_clear:
-            msg_tokens = count_tokens(msg.get("content", ""))
-            cleared_tokens += msg_tokens
-            msg["content"] = f"[工具结果已清理 • 约 {int(msg_tokens)} tokens]"
-            msg["_cleared"] = True
-            cleared += 1
+            # 保留最近的 tool_results
+            keep_recent = MICRO_COMPACT_KEEP_COUNT
+            # 正确处理 keep_recent=0 的情况（Python 中 :-0 等于 :0，返回空列表）
+            if keep_recent > 0:
+                to_clear = tool_results[:-keep_recent]
+            else:
+                to_clear = tool_results[:] if tool_results else []
+            for i, msg in to_clear:
+                msg_tokens = count_tokens(msg.get("content", ""))
+                cleared_tokens += msg_tokens
+                msg["content"] = f"[工具结果已清理 • 约 {int(msg_tokens)} tokens]"
+                msg["_cleared"] = True
+                cleared += 1
 
         if cleared > 0:
             logger.info(f"Micro compact: cleared {cleared} tool results")
@@ -385,12 +382,14 @@ class CompactEngine:
             count_tokens(m.get("content", "") or "")
             for m in self._memory._history
         )
+        logger.debug(f"[compact] Auto compact start: {original_count} messages, {original_tokens} tokens")
 
         # 查找或创建 boundary
         boundary_idx = None
         for i, msg in enumerate(self._memory._history):
             if is_compact_boundary(msg):
                 boundary_idx = i
+                logger.debug(f"[compact] Existing boundary found at index {i}")
                 break
 
         # 确定保留消息的起始位置
@@ -400,30 +399,32 @@ class CompactEngine:
             preserved = self._memory._history[start_idx:]
         else:
             preserved = self._memory._history[-preserve_count:] if self._memory._history else []
+        logger.debug(f"[compact] Preserving {len(preserved)} messages after boundary")
 
         # 生成摘要
         summary = self._generate_summary(self._memory._history, boundary_idx, llm_client)
 
-        # 重建 history
-        if boundary_idx is not None:
-            self._memory._history = self._memory._history[:boundary_idx + 1]
-        else:
-            self._memory._history = []
+        # 重建 history（加锁防止并发读取看到半成品）
+        with self._memory._rw_lock:
+            if boundary_idx is not None:
+                self._memory._history = self._memory._history[:boundary_idx + 1]
+            else:
+                self._memory._history = []
 
-        # 添加 boundary（如果没有的话）
-        if boundary_idx is None:
-            boundary = create_compact_boundary(original_count, int(original_tokens), summary)
-            self._memory._history.append(boundary)
+            # 添加 boundary（如果没有的话）
+            if boundary_idx is None:
+                boundary = create_compact_boundary(original_count, int(original_tokens), summary)
+                self._memory._history.append(boundary)
 
-        # 添加摘要消息
-        self._memory._history.append({
-            "role": "system",
-            "content": f"[对话摘要]\n{summary}",
-            "timestamp": datetime.now().isoformat()
-        })
+            # 添加摘要消息
+            self._memory._history.append({
+                "role": "system",
+                "content": f"[对话摘要]\n{summary}",
+                "timestamp": datetime.now().isoformat()
+            })
 
-        # 保留最近的 preserved 消息 (already sliced to preserve_count above)
-        self._memory._history.extend(preserved)
+            # 保留最近的 preserved 消息 (already sliced to preserve_count above)
+            self._memory._history.extend(preserved)
 
         tokens_saved = original_tokens - sum(
             count_tokens(m.get("content", "") or "")
@@ -455,20 +456,22 @@ class CompactEngine:
             count_tokens(m.get("content", "") or "")
             for m in self._memory._history
         )
+        logger.debug(f"[compact] Full compact start: {original_count} messages, {original_tokens} tokens")
 
         # 创建新的 boundary（带完整摘要）
         summary = self._generate_summary(self._memory._history, None, llm_client)
         boundary = create_compact_boundary(original_count, int(original_tokens), summary)
 
-        # 清空并重建
-        self._memory._history = [boundary]
-        self._memory._history.append({
-            "role": "system",
-            "content": f"[对话摘要]\n{summary}",
-            "timestamp": datetime.now().isoformat()
-        })
+        # 清空并重建（加锁防止并发读取看到半成品）
+        with self._memory._rw_lock:
+            self._memory._history = [boundary]
+            self._memory._history.append({
+                "role": "system",
+                "content": f"[对话摘要]\n{summary}",
+                "timestamp": datetime.now().isoformat()
+            })
 
-        logger.info(f"Full compact: saved session with {original_count} messages")
+        logger.info(f"[compact] Full compact complete: saved session, boundary created, history cleared")
         new_tokens = sum(
             count_tokens(m.get("content", "") or "")
             for m in self._memory._history
@@ -488,6 +491,7 @@ class CompactEngine:
             msg_range = messages[:boundary_idx]
         else:
             msg_range = messages
+        logger.debug(f"[compact] Generating summary for {len(msg_range)} messages")
 
         # 构建摘要请求
         msg_texts = []
@@ -501,11 +505,7 @@ class CompactEngine:
 
         # Load prompt template from config
         try:
-            prompt_template = config.get_summary_template()
-            if "(对话历史将自动插入)" in prompt_template:
-                prompt = prompt_template.replace("(对话历史将自动插入)", messages_content)
-            else:
-                prompt = f"{prompt_template}\n\n{messages_content}"
+            prompt = config.get_summary_prompt(messages_content)
         except Exception as e:
             logger.warning(f"Failed to load summary template: {e}")
             prompt = f"Please generate a concise summary for the following conversation:\n\n{messages_content}"
@@ -516,61 +516,13 @@ class CompactEngine:
                 create_user_message(prompt)
             ]
 
-            # 使用真正的 LLM 生成摘要
-            if llm_client is not None:
-                response, _, _, _ = llm_client.chat(summary_messages, stream=False)
-                return response[:2000] if response else "[摘要生成失败: 无响应]"
-            else:
-                # fallback 到简单摘要，传入原始对话历史
-                response, _ = self._llm_fallback_summary(summary_messages, original_history=msg_range)
-                return response[:2000]
+            response, _, _, _ = llm_client.chat(summary_messages, stream=False)
+            summary_text = response[:2000] if response else "[摘要生成失败: 无响应]"
+            logger.debug(f"[compact] LLM summary generated: {len(summary_text)} chars")
+            return summary_text
         except Exception as e:
             logger.error(f"Summary generation failed: {e}")
             return f"[摘要生成失败: {str(e)[:100]}]"
-
-    def _llm_fallback_summary(self, messages: List[Dict[str, Any]], original_history: Optional[List[Dict[str, Any]]] = None) -> tuple:
-        """基于规则的简单摘要生成（不使用LLM）"""
-        # 使用原始对话历史（如果提供），否则使用传入的摘要请求消息
-        source = original_history if original_history else messages
-
-        # 提取关键信息：用户消息、工具调用、结果
-        user_inputs = []
-        tool_calls = []
-        last_tool = None
-
-        for m in source:
-            role = m.get("role", "")
-            content = m.get("content", "") or ""
-            tool_name = m.get("tool_name", "")
-
-            if role == "user" and content:
-                user_inputs.append(content[:100])
-            elif role == "tool" and tool_name:
-                tool_calls.append(tool_name)
-                last_tool = tool_name
-
-        # 构建简单摘要
-        summary_parts = []
-
-        if user_inputs:
-            recent = user_inputs[-3:]
-            summary_parts.append(f"用户输入({len(user_inputs)}条): {' | '.join(recent[:2])}")
-
-        if tool_calls:
-            from collections import Counter
-            tool_counts = Counter(tool_calls)
-            top_tools = tool_counts.most_common(3)
-            tools_str = ", ".join([f"{t}({c})" for t, c in top_tools])
-            summary_parts.append(f"工具调用({len(tool_calls)}次): {tools_str}")
-
-        if last_tool:
-            summary_parts.append(f"最近工具: {last_tool}")
-
-        if not summary_parts:
-            return "[对话摘要 - 无足够内容生成摘要]", ""
-
-        summary = "; ".join(summary_parts)
-        return f"[对话摘要] {summary}", ""
 
 
 # Global memory instance

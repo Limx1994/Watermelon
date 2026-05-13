@@ -2,6 +2,7 @@
 
 import logging
 import threading
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from .base import BaseMCPClient
@@ -24,10 +25,6 @@ class MCPManager:
         self._connected = False
         self._lock = threading.Lock()
 
-    @property
-    def is_connected(self) -> bool:
-        return self._connected
-
     def connect_all(self) -> bool:
         """Connect to all configured MCP servers"""
         if not self.config_enabled:
@@ -37,6 +34,12 @@ class MCPManager:
         success_count = 0
         for server_config in self.server_configs:
             server_name = server_config.get("name", "unnamed")
+
+            # 检查是否启用
+            if not server_config.get("enabled", True):
+                logger.info(f"MCP server '{server_name}' disabled, skipping")
+                continue
+
             try:
                 client = create_mcp_client(server_config)
                 if client.connect():
@@ -48,7 +51,7 @@ class MCPManager:
                     self._datastore.save_tools(server_name, tools)
                     self._datastore.save_status(server_name, {
                         "connected": True,
-                        "connected_at": None,  # Will be set by datastore
+                        "connected_at": datetime.now(timezone.utc).isoformat(),
                     })
                     success_count += 1
                     logger.info(f"Connected to MCP server: {server_name}")
@@ -95,6 +98,7 @@ class MCPManager:
         """Execute a tool by name, delegating to the appropriate client"""
         result = self._index.find(tool_name)
         if not result:
+            logger.warning(f"Tool not found: {tool_name}")
             return {
                 "success": False,
                 "content": "",
@@ -110,7 +114,7 @@ class MCPManager:
 
         server_name, client = result
         try:
-            logger.debug(f"MCP call_tool: {tool_name} -> server={server_name}")
+            logger.debug(f"MCP call_tool: {tool_name} -> server={server_name} | args={list(arguments.keys())}")
             return client.call_tool(tool_name, arguments)
         except Exception as e:
             logger.error(f"Tool call failed for {tool_name}: {e}")
@@ -124,8 +128,3 @@ class MCPManager:
                 "content": "",
                 "error": str(e)
             }
-
-    def reload(self) -> None:
-        """Reload configuration and reconnect"""
-        self.disconnect_all()
-        self.connect_all()

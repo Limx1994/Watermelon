@@ -39,7 +39,7 @@ class ExternalTool(BaseTool):
 
     def execute(self, **kwargs) -> ToolResult:
         """Execute the external CLI program"""
-        logger.info(f"[tool:{self.name}] start | args={list(kwargs.keys())}")
+        logger.debug(f"[tool:{self.name}] start | args={list(kwargs.keys())}")
         try:
             # Determine if command is relative or absolute
             cmd_str = self.command
@@ -47,7 +47,7 @@ class ExternalTool(BaseTool):
                 # Relative path: join with project root
                 cmd_str = str(self._project_root / cmd_str)
 
-            logger.info(f"[tool:{self.name}] exe={cmd_str}")
+            logger.debug(f"[tool:{self.name}] exe={cmd_str}")
 
             # Build command with arguments
             # Use executable path directly (never shlex.split it — breaks paths with spaces)
@@ -78,7 +78,7 @@ class ExternalTool(BaseTool):
             elapsed = time.monotonic() - t0
             _stdout = result.stdout or ""
             _stderr = result.stderr or ""
-            logger.info(f"[tool:{self.name}] exit={result.returncode} | {elapsed:.2f}s | stdout={len(_stdout)}B stderr={len(_stderr)}B")
+            logger.debug(f"[tool:{self.name}] exit={result.returncode} | {elapsed:.2f}s | stdout={len(_stdout)}B stderr={len(_stderr)}B")
 
             if result.stdout:
                 try:
@@ -110,6 +110,8 @@ class ExternalTool(BaseTool):
                         elif 'stdout' in data:
                             content = data['stdout'] or ""
 
+                    content = content.replace('\r', '')
+
                     # 错误信息优先级：error > stderr
                     error_msg = data.get("error") or (stderr_content if stderr_content else None)
 
@@ -123,7 +125,7 @@ class ExternalTool(BaseTool):
                     if "returnCode" in data and "returnCode" not in metadata:
                         metadata["returnCode"] = data["returnCode"]
 
-                    logger.info(f"[tool:{self.name}] ok | content={len(content)}B"
+                    logger.debug(f"[tool:{self.name}] ok | content={len(content)}B"
                                 f"{' error=' + error_msg[:100] if error_msg else ''}")
                     return ToolResult(
                         success=success,

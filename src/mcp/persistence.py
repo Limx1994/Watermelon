@@ -16,7 +16,7 @@ class MCPDataStore:
 
     def __init__(self, mcpdata_dir: str = "mcpdata"):
         self.mcpdata_path = get_project_root() / mcpdata_dir
-        ensure_directory(str(mcpdata_dir))
+        ensure_directory(str(self.mcpdata_path))
         self._errors_log = self.mcpdata_path / "errors.log"
 
     def _server_file(self, server_name: str, suffix: str) -> Path:
@@ -63,5 +63,6 @@ class MCPDataStore:
             }
             with open(self._errors_log, "a", encoding="utf-8") as f:
                 f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+            logger.error(f"Error logged for {server_name}: {error.get('message', str(error)[:100])}")
         except Exception as e:
             logger.warning(f"Failed to append error log: {e}")

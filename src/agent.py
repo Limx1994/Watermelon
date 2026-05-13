@@ -5,7 +5,7 @@ import logging
 import subprocess
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -20,6 +20,7 @@ TRUNCATE_CONTENT_LENGTH = 20000
 from .config import config
 from .llm.client import (
     LLMClient,
+    InterruptedError,
     create_system_message,
     create_user_message,
     create_assistant_message,
@@ -28,7 +29,6 @@ from .llm.client import (
 )
 from .tools.registry import registry
 from .tools.loader import load_external_tools
-from .mcp.server import MCPServer
 from .mcp.manager import MCPManager
 from .memory import memory, CompactEngine
 from .utils.token_counter import count_tokens
@@ -97,6 +97,7 @@ def classify_error(e: Exception) -> str:
     if any(kw in error_str for kw in ("tool", "execution", "invalid arguments")):
         return "tool"
 
+    logger.debug(f"Error classified as 'unknown': {type(e).__name__}: {str(e)[:100]}")
     return "unknown"
 
 
@@ -169,10 +170,10 @@ class Agent:
     ):
         self.output_callback = output_callback
         self.stop_event = stop_event
-        self.llm = LLMClient()
-        self.mcp_server = MCPServer()
+        self.llm = LLMClient(stop_event=self.stop_event)
         self.mcp_manager = MCPManager(config.mcp_enabled, config.mcp_servers)
-        self.mcp_manager.connect_all()
+        threading.Thread(target=self.mcp_manager.connect_all, daemon=True, name="mcp-connect").start()
+        logger.info("MCP connection started in background thread")
         # Autonomous mode infrastructure (must init before _setup_tools)
         self._pending_inputs: deque = deque()
         self._pending_lock = threading.Lock()
@@ -184,16 +185,29 @@ class Agent:
         self._first_tick = True
         self._run_lock = threading.RLock()
         self._setup_tools()
-        # Track reasoning_content for multi-turn in thinking mode
-        self._last_reasoning: str = ""
         self.total_tokens: float = 0  # 累计token消耗
         # 上下文压缩引擎
         self._compact_engine = CompactEngine(memory)
         logger.info(f"Agent initialized: model={config.model}")
-        # API 返回的 usage 信息
-        self._last_usage: Optional[Dict[str, int]] = None
         # Stop hooks: callable(messages, tool_results) -> Optional[str]
         self._stop_hooks: list = []
+        # Skill allowed-tools override (set by skill handler)
+        self._allowed_tools_override: Optional[List[str]] = None
+
+    def _interruptible_sleep(self, seconds: float) -> None:
+        """Sleep for up to seconds, checking stop_event every 0.2s.
+
+        Raises AgentCancelledError if stop_event is set during sleep.
+        """
+        elapsed = 0.0
+        step = 0.2
+        while elapsed < seconds:
+            if self.stop_event and self.stop_event.is_set():
+                logger.info(f"Agent sleep interrupted: {elapsed:.1f}s/{seconds:.1f}s")
+                raise AgentCancelledError()
+            remaining = min(step, seconds - elapsed)
+            time.sleep(remaining)
+            elapsed += remaining
 
     def _setup_tools(self) -> None:
         """Register built-in tools"""
@@ -203,7 +217,20 @@ class Agent:
         from .tools.sleep import SleepTool
         sleep_tool = SleepTool(self._sleep_event, agent=self)
         registry.register(sleep_tool)
+        # Register skill tool if skills are loaded
+        self._try_register_skill_tool()
         logger.info(f"Tools registered: {registry.list_tools()}")
+
+    def _try_register_skill_tool(self) -> None:
+        """Register SkillTool if skills are loaded but tool not yet registered."""
+        try:
+            from .skills.tool import SkillTool
+            from .skills.registry import skill_registry
+            if skill_registry.is_loaded() and registry.get("invoke_skill") is None:
+                registry.register(SkillTool())
+                logger.info("SkillTool registered (deferred)")
+        except ImportError:
+            pass
 
     def _execute_tool_call(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a tool call and return the result. Never raises."""
@@ -239,17 +266,13 @@ class Agent:
         with self._pending_lock:
             return len(self._pending_inputs)
 
-    def register_stop_hook(self, hook: Callable) -> None:
-        """Register a stop hook. hook(messages, tool_calls) -> Optional[str].
-        Returns error message to inject if AI should be forced to continue, or None."""
-        self._stop_hooks.append(hook)
-
     def _run_stop_hooks(self, messages: list, tool_results: list) -> Optional[str]:
         """Run all stop hooks. Returns first blocking error message, or None."""
         for hook in self._stop_hooks:
             try:
                 error = hook(messages, tool_results)
                 if error:
+                    logger.debug(f"Stop hook triggered: {error[:100]}")
                     return error
             except Exception as e:
                 logger.error(f"Stop hook error: {e}")
@@ -297,8 +320,25 @@ class Agent:
         except Exception as e:
             logger.debug(f"Project context: git status failed: {e}")
 
+        # Inject available skills listing
+        try:
+            from .skills.registry import skill_registry
+            if skill_registry.is_loaded():
+                skill_lines = []
+                for s in skill_registry.list_skills():
+                    hint = f" ({s.argument_hint})" if s.argument_hint else ""
+                    skill_lines.append(f"  - /{s.name}: {s.description}{hint}")
+                if skill_lines:
+                    skills_text = "\n".join(skill_lines)
+                    parts.append(f"Available skills:\n{skills_text}")
+                    logger.debug(f"Project context: {len(skill_lines)} skills injected")
+        except ImportError:
+            pass
+
         parts.append("</system-reminder>")
-        return "\n".join(parts)
+        context_str = "\n".join(parts)
+        logger.debug(f"Project context built: {len(parts)} parts, {len(context_str)} chars")
+        return context_str
 
     def _calculate_context_tokens(self, messages: List[Dict[str, Any]]) -> int:
         """计算当前 context 的 token 数（system + messages + tool_calls arguments）"""
@@ -309,11 +349,16 @@ class Agent:
                 continue
             content = m.get("content", "") or ""
             memory_tokens += count_tokens(content)
+            reasoning = m.get("reasoning_content", "") or ""
+            if reasoning:
+                memory_tokens += count_tokens(reasoning)
             for tc in m.get("tool_calls", []):
                 args = tc.get("function", {}).get("arguments", "")
                 if args:
                     memory_tokens += count_tokens(args)
-        return int(system_tokens + memory_tokens)
+        result = int(system_tokens + memory_tokens)
+        logger.debug(f"Context tokens: system={system_tokens}, memory={memory_tokens}, total={result}")
+        return result
 
     def run(self, user_input: str) -> str:
         """Run the agent with a user input. Returns the final response text."""
@@ -325,6 +370,9 @@ class Agent:
 
     def _run_inner(self, user_input: str) -> str:
         """Internal run logic (called with _run_lock held)."""
+        logger.info(f"_run_inner start: input={user_input[:80]}...")
+        # Retry SkillTool registration in case skills loaded after _setup_tools
+        self._try_register_skill_tool()
         # Build messages for LLM
         messages: List[Dict[str, Any]] = [create_system_message(config.get_system_prompt())]
 
@@ -342,6 +390,12 @@ class Agent:
         tools = list(self.llm.tools)
         tools.extend(self.mcp_manager.get_all_tool_definitions())
 
+        # Apply allowed-tools filter for skills
+        if self._allowed_tools_override is not None:
+            allowed = set(self._allowed_tools_override)
+            tools = [t for t in tools if t.get("function", {}).get("name") in allowed]
+            logger.debug(f"Skill tool filter: {len(tools)} tools allowed")
+
         # Pre-loop compression check
         current_tokens = self._calculate_context_tokens(messages)
         should_compact, level = self._compact_engine.should_compact(
@@ -358,27 +412,30 @@ class Agent:
                 messages = [create_system_message(config.get_system_prompt())]
                 messages.extend(memory.get_conversation_for_llm())
                 messages.append(create_user_message(config.compact_resume_prompt))
-                messages.append(create_user_message(project_context))
+                if project_context:
+                    messages.append(create_user_message(project_context))
                 current_tokens = self._calculate_context_tokens(messages)
 
-                # Escalation loop
-                should_compact_again, next_level = self._compact_engine.should_compact(
+                # Escalation loop — forced level-up on each iteration
+                should_compact, suggested_level = self._compact_engine.should_compact(
                     current_tokens, config.effective_context_window
                 )
-                while should_compact_again and next_level < CompactEngine.LEVEL_FULL:
-                    next_level = min(next_level + 1, CompactEngine.LEVEL_FULL)
-                    result = self._compact_engine.compact(next_level, self.llm)
+                while should_compact and suggested_level < CompactEngine.LEVEL_FULL and not self.stop_event.is_set():
+                    target_level = min(suggested_level + 1, CompactEngine.LEVEL_FULL)
+                    logger.debug(f"Compact escalation: level {suggested_level} -> {target_level}")
+                    result = self._compact_engine.compact(target_level, self.llm)
                     if result["compacted"]:
                         self._stream_output(
-                            f"\n[追加压缩: L{next_level} • 节省 ~{result['tokens_saved']} tokens]\n",
+                            f"\n[追加压缩: L{target_level} • 节省 ~{result['tokens_saved']} tokens]\n",
                             "compact"
                         )
                         messages = [create_system_message(config.get_system_prompt())]
                         messages.extend(memory.get_conversation_for_llm())
                         messages.append(create_user_message(config.compact_resume_prompt))
-                        messages.append(create_user_message(project_context))
+                        if project_context:
+                            messages.append(create_user_message(project_context))
                         current_tokens = self._calculate_context_tokens(messages)
-                    should_compact_again, next_level = self._compact_engine.should_compact(
+                    should_compact, suggested_level = self._compact_engine.should_compact(
                         current_tokens, config.effective_context_window
                     )
 
@@ -403,14 +460,12 @@ class Agent:
                     thinking_started[0] = True
                 self._stream_output(text, "answer")
 
-        def usage_callback(usage: Dict[str, int]):
-            self._last_usage = usage
-
         consecutive_errors = 0
         MAX_CONSECUTIVE_ERRORS = 3
 
         while turns < max_turns:
             if self.stop_event and self.stop_event.is_set():
+                logger.info("Agent cancelled by stop event")
                 raise AgentCancelledError()
 
             # Warn when approaching turn limit
@@ -419,6 +474,7 @@ class Agent:
                 self._stream_output(f"\n[Warning: {remaining} turns remaining]\n", "compact")
 
             turns += 1
+            logger.debug(f"Turn {turns}/{max_turns}, tool_calls={len(tool_calls) if 'tool_calls' in locals() else 0}")
 
             # API call with error recovery for prompt-too-long and model degradation
             try:
@@ -427,17 +483,23 @@ class Agent:
                 # Restore original model if it was degraded and succeeded
                 if self.llm.model != self.llm._original_model:
                     self.llm.restore_model()
+                    logger.info(f"Model restored to {self.llm.model}")
                     self._stream_output(f"\n[模型已恢复: {self.llm.model}]\n", "compact")
+            except InterruptedError:
+                logger.info("LLM call interrupted by stop_event")
+                raise AgentCancelledError()
             except Exception as e:
                 error_str = str(e).lower()
+                error_type = classify_error(e)
                 # Model degradation: try fallback model on first error
                 if config.fallback_config and consecutive_errors == 0:
                     fb = config.fallback_config
+                    logger.warning(f"Model degradation triggered: {error_type}: {type(e).__name__}: {str(e)[:200]}")
                     self.llm.switch_model(fb["model"], client=self.llm._fallback_client)
                     self._stream_output(f"\n[模型降级: {fb['model']}]\n", "compact")
                     consecutive_errors += 1
                     continue
-                if any(kw in error_str for kw in ("context", "too long", "length", "token")):
+                if error_type == "context":
                     consecutive_errors += 1
                     if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
                         self._stream_output("\n[Error]: Too many consecutive errors, stopping.\n")
@@ -448,50 +510,39 @@ class Agent:
                         messages = [create_system_message(config.get_system_prompt())]
                         messages.extend(memory.get_conversation_for_llm())
                         messages.append(create_user_message(config.compact_resume_prompt))
-                        messages.append(create_user_message(project_context))
+                        if project_context:
+                            messages.append(create_user_message(project_context))
                         self._stream_output("[压缩完成 — 重试中...]\n", "compact")
                         continue
                 raise
 
-            # Handle reasoning output
-            if (reasoning or content) and tool_calls:
+            # Handle tool calls (with optional reasoning/content display)
+            if tool_calls:
                 if config.show_thinking and reasoning:
                     for line in reasoning.split('\n'):
                         if line.strip():
                             self._stream_output(f"{line}\n", "thinking")
                     self._stream_output("\n", "thinking")
-                # Display content that accompanies tool calls
                 if content:
                     self._stream_output(content + "\n", "answer")
-                assistant_msg = {
+                assistant_msg: Dict[str, Any] = {
                     "role": "assistant", "content": content,
                     "tool_calls": [{
                         "id": tc["id"], "type": "function",
                         "function": {"name": tc["name"], "arguments": tc["arguments"]}
                     } for tc in tool_calls]
                 }
-                assistant_msg["reasoning_content"] = reasoning
+                if reasoning:
+                    assistant_msg["reasoning_content"] = reasoning
+                    logger.debug(f"Tool-call assistant msg: included reasoning_content ({len(reasoning)} chars)")
                 messages.append(assistant_msg)
-                self._last_reasoning = reasoning
-            elif tool_calls:
-                # Display content that accompanies tool calls
-                if content:
-                    self._stream_output(content + "\n", "answer")
-                messages.append({
-                    "role": "assistant", "content": content,
-                    "reasoning_content": reasoning or "",
-                    "tool_calls": [{
-                        "id": tc["id"], "type": "function",
-                        "function": {"name": tc["name"], "arguments": tc["arguments"]}
-                    } for tc in tool_calls]
-                })
 
             # needsFollowUp: no tool calls = final response
             if not tool_calls:
                 try:
                     final_response, final_reasoning, usage, fr = self.llm.chat(
                         messages, tools=tools, stream=True,
-                        callback=wrap_callback, usage_callback=usage_callback
+                        callback=wrap_callback
                     )
                 except AgentCancelledError:
                     raise
@@ -501,7 +552,7 @@ class Agent:
                     break
                 # Max output tokens recovery
                 if fr == "length":
-                    messages.append(create_assistant_message(final_response))
+                    messages.append(create_assistant_message(final_response, final_reasoning))
                     messages.append(create_user_message(config.max_tokens_recovery_prompt))
                     self._stream_output("\n[输出截断 — 继续...]\n", "compact")
                     thinking_started[0] = False
@@ -601,7 +652,8 @@ class Agent:
                     messages = [create_system_message(config.get_system_prompt())]
                     messages.extend(memory.get_conversation_for_llm())
                     messages.append(create_user_message(config.compact_resume_prompt))
-                    messages.append(create_user_message(project_context))
+                    if project_context:
+                        messages.append(create_user_message(project_context))
                     current_tokens = self._calculate_context_tokens(messages)
 
             self._stream_output(f"{current_tokens / config.effective_context_window if config.effective_context_window > 0 else 0:.2f}", "context_usage")
@@ -609,21 +661,26 @@ class Agent:
             # Token budget nudge: inject message to keep AI working
             usage_ratio = current_tokens / config.effective_context_window if config.effective_context_window > 0 else 0
             if usage_ratio >= config.nudge_threshold:
-                nudge_msg = config.nudge_prompt.replace("{pct:.0%}", f"{usage_ratio:.0%}")
+                nudge_msg = config.get_nudge_prompt(usage_ratio)
                 messages.append(create_user_message(nudge_msg))
                 logger.info(f"Token nudge injected: usage={usage_ratio:.0%} threshold={config.nudge_threshold:.0%}")
                 self._stream_output(f"\n[Token 预算警告: {usage_ratio:.0%} — 注入 nudge 消息]\n", "compact")
 
+        if turns >= max_turns:
+            logger.warning(f"Agent max_turns reached: {turns}/{max_turns}")
+
         # Save assistant response to memory
-        memory.add_message("assistant", final_response)
+        memory.add_message("assistant", final_response, reasoning_content=final_reasoning)
+
+        # Clear skill tools override
+        self._allowed_tools_override = None
 
         # Token display
         system_tokens = count_tokens(config.get_system_prompt())
+        # memory already contains user_input and final_response, so memory_tokens covers both
         memory_tokens = sum(count_tokens(msg.get("content", "")) for msg in memory.get_conversation_for_llm())
-        input_tokens = count_tokens(user_input)
         reasoning_tokens = count_tokens(final_reasoning) if final_reasoning else 0
-        output_tokens = count_tokens(final_response)
-        total_this = system_tokens + memory_tokens + input_tokens + reasoning_tokens + output_tokens
+        total_this = system_tokens + memory_tokens + reasoning_tokens
         self.total_tokens += total_this
 
         def fmt_token(t):
@@ -631,13 +688,16 @@ class Agent:
                 return f"{t/1000:.3f}K"
             return f"{t:.0f}"
 
+        logger.info(f"Agent response: {len(final_response)} chars, {turns} turns, tokens={fmt_token(total_this)}")
+
         self._stream_output(
-            f"⬆{fmt_token(system_tokens + memory_tokens + input_tokens)} "
-            f"⬇{fmt_token(reasoning_tokens + output_tokens)} "
+            f"⬆{fmt_token(system_tokens + memory_tokens)} "
+            f"⬇{fmt_token(reasoning_tokens)} "
             f"∫{fmt_token(self.total_tokens)}",
             "token_info"
         )
 
+        logger.info(f"_run_inner end: turns={turns}, response_len={len(final_response)}")
         return final_response
 
     def start_autonomous_loop(self) -> None:
@@ -701,7 +761,7 @@ class Agent:
                             self._stream_output(f"\n{error_msg}\n", "error")
                             logger.warning(f"Retryable error: {error_type}, retry {new_retry_count}/{max_retries}")
 
-                            time.sleep(wait_time)
+                            self._interruptible_sleep(wait_time)
                             with self._pending_lock:
                                 self._pending_inputs.append({"text": text, "source": source, "retry_count": new_retry_count})
                             self._work_event.set()
@@ -712,7 +772,7 @@ class Agent:
                                 error_msg += f"\n已达到最大重试次数 ({max_retries})"
                             self._stream_output(f"\n{error_msg}\n", "error", force=True)
                             logger.error(f"Task failed: {error_type}: {e}", exc_info=True)
-                            time.sleep(1)
+                            self._interruptible_sleep(1)
                     finally:
                         if self.output_callback and self.get_pending_count() == 0:
                             self.output_callback("_autonomous_done", "")
@@ -727,16 +787,3 @@ class Agent:
             logger.info("Autonomous mode deactivated")
             if self.output_callback:
                 self.output_callback("_agent_done", "")
-
-    def reset(self) -> None:
-        """Reset agent state"""
-        logger.info("Agent state reset")
-        memory.clear()
-        self._last_reasoning = ""
-        self._autonomous_mode = False
-        self._autonomous_running = False
-        self._is_sleeping = False
-        self._first_tick = True
-        with self._pending_lock:
-            self._pending_inputs.clear()
-        self._compact_engine = CompactEngine(memory)

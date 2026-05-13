@@ -5,32 +5,19 @@ import logging
 import threading
 from typing import TYPE_CHECKING
 
-logger = logging.getLogger(__name__)
+from .utils import output as _output
 
-# Role display mapping for Chinese output
-ROLE_DISPLAY_MAP = {"user": "用户", "assistant": "助手", "system": "系统", "tool": "工具"}
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ..tui import SimpleTUI
-
-
-def _output(tui: "SimpleTUI", text: str, style: str = "class:command") -> None:
-    """向输出区域追加一条消息"""
-    with tui._fragments_lock:
-        tui._fragments.append((style, text))
-
-
-def _output_lines(tui: "SimpleTUI", lines: list, style: str = "class:command") -> None:
-    """向输出区域追加多行消息"""
-    with tui._fragments_lock:
-        for line in lines:
-            tui._fragments.append((style, line))
 
 
 # ── /help ──────────────────────────────────────────────────
 
 def cmd_help(tui: "SimpleTUI", args: str) -> None:
     from .registry import command_registry
+    logger.debug("Command: /help")
     commands = command_registry.list_commands()
     lines = [
         "\n┌─────────────────────────────────────────────┐",
@@ -83,6 +70,7 @@ def cmd_model(tui: "SimpleTUI", args: str) -> None:
 
 def cmd_config(tui: "SimpleTUI", args: str) -> None:
     from ..config import config
+    logger.debug("Command: /config")
     # 隐藏敏感信息
     display_config = json.loads(json.dumps(config._config))
     if "openai" in display_config and "api_key" in display_config["openai"]:
@@ -97,6 +85,7 @@ def cmd_config(tui: "SimpleTUI", args: str) -> None:
 
 def cmd_history(tui: "SimpleTUI", args: str) -> None:
     from ..memory import memory
+    logger.debug("Command: /history")
     messages = memory.get_messages()
     if not messages:
         _output(tui, "\n对话历史为空\n")
@@ -129,6 +118,7 @@ def cmd_save(tui: "SimpleTUI", args: str) -> None:
 
 def cmd_load(tui: "SimpleTUI", args: str) -> None:
     from ..memory import memory
+    logger.debug(f"Command: /load {args.strip()}")
     sessions = memory.list_sessions()
     if not sessions:
         _output(tui, "\n没有已保存的会话\n")
@@ -184,6 +174,7 @@ def cmd_load(tui: "SimpleTUI", args: str) -> None:
 
 def cmd_memory(tui: "SimpleTUI", args: str) -> None:
     from ..memory import memory
+    logger.debug(f"Command: /memory {args.strip()}")
     count = 20
     if args.strip():
         try:
@@ -238,6 +229,7 @@ def cmd_compact(tui: "SimpleTUI", args: str) -> None:
             # 清除压缩指示器
             tui._output_queue.put(("compact", ""))
         except Exception as e:
+            logger.error(f"Manual compact failed: {e}", exc_info=True)
             tui._output_queue.put(("error", f"\n压缩失败: {e}\n"))
 
     threading.Thread(target=_run, daemon=True).start()
@@ -278,16 +270,26 @@ def cmd_tools(tui: "SimpleTUI", args: str) -> None:
     from ..tools.registry import registry
     enabled = config.enabled_tools
     all_tools = registry.list_tools()
+    all_tools_set = set(all_tools)
+    enabled_set = set(enabled)
+
     lines = [f"\n已启用的工具 ({len(enabled)} 个):\n"]
     for name in enabled:
         tool = registry.get(name)
         desc = tool.description if tool else "(未加载)"
         lines.append(f"  {name:<16s} {desc}\n")
-    if all_tools:
-        loaded_names = set(all_tools)
-        disabled = [n for n in enabled if n not in loaded_names]
-        if disabled:
-            lines.append(f"\n  未加载: {', '.join(disabled)}\n")
+
+    builtin = [n for n in all_tools if n not in enabled_set]
+    if builtin:
+        lines.append(f"\n内置工具 ({len(builtin)} 个):\n")
+        for name in builtin:
+            tool = registry.get(name)
+            desc = tool.description if tool else ""
+            lines.append(f"  {name:<16s} {desc}\n")
+
+    disabled = [n for n in enabled if n not in all_tools_set]
+    if disabled:
+        lines.append(f"\n  未加载: {', '.join(disabled)}\n")
     _output(tui, "".join(lines))
 
 

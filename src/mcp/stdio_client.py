@@ -40,12 +40,12 @@ class StdioMCPClient(BaseMCPClient):
         self._response_queue: "queue.Queue[Dict[str, Any]]" = queue.Queue()
         self._stdin_lock: threading.Lock = threading.Lock()
         self._next_id: int = 0
+        self._id_lock: threading.Lock = threading.Lock()
         self._connected: bool = False
         self._tools: List[Dict[str, Any]] = []
-        self._server_info: Dict[str, Any] = {}
-        self._server_capabilities: Dict[str, Any] = {}
         self._restarting: bool = False
         self._shutdown: bool = False
+        self._consecutive_json_failures: int = 0
 
     # ------------------------------------------------------------------
     # Public API
@@ -92,6 +92,7 @@ class StdioMCPClient(BaseMCPClient):
             self._cleanup()
 
             if self.auto_restart and not self._restarting and not self._shutdown:
+                logger.info(f"Auto-restarting MCP server '{self.name}' (rc={rc})")
                 self._restarting = True
                 try:
                     return self.connect()
@@ -138,6 +139,7 @@ class StdioMCPClient(BaseMCPClient):
                 "error": result.get("error") if is_error else None
             }
         except Exception as e:
+            logger.error(f"MCP stdio call_tool '{tool_name}' failed: {type(e).__name__}: {e}")
             return {
                 "success": False,
                 "content": "",
@@ -233,15 +235,13 @@ class StdioMCPClient(BaseMCPClient):
 
                 msg = json.loads(line)
                 self._response_queue.put(msg)
-                consecutive_failures = 0
                 self._consecutive_json_failures = 0
             except json.JSONDecodeError:
-                consecutive_failures = getattr(self, '_consecutive_json_failures', 0) + 1
-                self._consecutive_json_failures = consecutive_failures
-                if consecutive_failures > JSON_PARSE_FAIL_THRESHOLD:
-                    logger.error(f"MCP stdio '{self.name}': too many consecutive JSON parse failures ({consecutive_failures}), stopping reader")
+                self._consecutive_json_failures += 1
+                if self._consecutive_json_failures > JSON_PARSE_FAIL_THRESHOLD:
+                    logger.error(f"MCP stdio '{self.name}': too many consecutive JSON parse failures ({self._consecutive_json_failures}), stopping reader")
                     break
-                logger.warning(f"MCP stdio '{self.name}': malformed JSON received ({consecutive_failures}/{JSON_PARSE_FAIL_THRESHOLD}), skipping: {line[:100]}")
+                logger.warning(f"MCP stdio '{self.name}': malformed JSON received ({self._consecutive_json_failures}/{JSON_PARSE_FAIL_THRESHOLD}), skipping: {line[:100]}")
                 continue
             except (BrokenPipeError, OSError, ValueError):
                 break
@@ -253,6 +253,7 @@ class StdioMCPClient(BaseMCPClient):
         if proc is None:
             return
 
+        logger.info(f"Cleaning up MCP stdio '{self.name}', pid={proc.pid}")
         self._process = None
 
         # Close stdin to signal EOF to the process
@@ -284,8 +285,6 @@ class StdioMCPClient(BaseMCPClient):
             request_id=self._next_request_id()
         )
         result = self._send_raw_request(request, timeout=10)
-        self._server_info = result.get("serverInfo", {})
-        self._server_capabilities = result.get("capabilities", {})
 
         # Send initialized notification (no response expected)
         notification = MCPProtocol.create_initialized_notification()
@@ -320,13 +319,17 @@ class StdioMCPClient(BaseMCPClient):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 # Drain any stale responses for this request ID
+                stale_count = 0
                 while not self._response_queue.empty():
                     try:
                         stale = self._response_queue.get_nowait()
                         if stale.get("id") == req_id:
                             break
+                        stale_count += 1
                     except queue.Empty:
                         break
+                if stale_count > 0:
+                    logger.debug(f"Drained {stale_count} stale responses for req_id={req_id}")
                 raise TimeoutError(f"MCP request timed out after {timeout}s (method: {request.get('method')})")
 
             try:
@@ -368,5 +371,6 @@ class StdioMCPClient(BaseMCPClient):
 
     def _next_request_id(self) -> int:
         """Get the next monotonically increasing request ID."""
-        self._next_id += 1
-        return self._next_id
+        with self._id_lock:
+            self._next_id += 1
+            return self._next_id

@@ -88,21 +88,6 @@ class CronTask:
             "next_run": self.next_run.isoformat() if self.next_run else None,
         }
 
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "CronTask":
-        task = cls(
-            name=data.get("name", "unnamed"),
-            prompt=data.get("prompt", ""),
-            cron_expression=data.get("cron_expression"),
-            interval_minutes=data.get("interval_minutes"),
-            enabled=data.get("enabled", True),
-        )
-        if data.get("last_run"):
-            task.last_run = datetime.fromisoformat(data["last_run"])
-        if data.get("next_run"):
-            task.next_run = datetime.fromisoformat(data["next_run"])
-        return task
-
 
 class CronScheduler:
     """Background daemon thread that checks scheduled tasks, ticks, and feeds work to the agent."""
@@ -159,20 +144,24 @@ class CronScheduler:
         """检测网络连接状态"""
         try:
             import urllib.request
-            urllib.request.urlopen("https://api.deepseek.com", timeout=5)
+            # 使用更可靠的检测端点，减少超时时间
+            urllib.request.urlopen("https://httpbin.org/get", timeout=3)
+            logger.debug("Network check: ok")
             return True
         except Exception:
+            logger.debug("Network check: failed")
             return False
 
     def _loop(self) -> None:
         while not self._stop_event.is_set():
             now = datetime.now()
 
-            # Network state monitoring
-            if not self._network_ok:
-                # 网络断开，检测是否恢复
+            # Network state monitoring - 使用统一的检测间隔，避免断网时频繁轮询
+            if (now - self._last_network_check).total_seconds() >= self._network_check_interval:
+                self._last_network_check = now
+                was_ok = self._network_ok
                 self._network_ok = self.check_network()
-                if self._network_ok:
+                if not was_ok and self._network_ok:
                     logger.info("Network recovered, triggering immediate tick")
                     if not self._agent._is_sleeping:
                         try:
@@ -181,13 +170,8 @@ class CronScheduler:
                             logger.error(f"Network recover tick failed: {e}")
                     self._last_tick = now
                     self._tick_jitter = random.uniform(0, min(self._tick_interval * 0.1, 2))
-            else:
-                # 网络正常，定期检测
-                if (now - self._last_network_check).total_seconds() >= self._network_check_interval:
-                    self._last_network_check = now
-                    if not self.check_network():
-                        self._network_ok = False
-                        logger.warning("Network disconnected")
+                elif was_ok and not self._network_ok:
+                    logger.warning("Network disconnected")
 
             # Check cron tasks
             with self._lock:
@@ -219,53 +203,6 @@ class CronScheduler:
 
             self._stop_event.wait(timeout=1)
 
-    def add_task(
-        self,
-        name: str,
-        prompt: str,
-        cron_expression: Optional[str] = None,
-        interval_minutes: Optional[int] = None,
-        enabled: bool = True,
-    ) -> CronTask:
-        logger.info(f"Task added: {name}")
-        with self._lock:
-            task = CronTask(
-                name=name,
-                prompt=prompt,
-                cron_expression=cron_expression,
-                interval_minutes=interval_minutes,
-                enabled=enabled,
-            )
-            self._tasks.append(task)
-            self._save_state()
-        return task
-
-    def remove_task(self, name: str) -> bool:
-        with self._lock:
-            for i, task in enumerate(self._tasks):
-                if task.name == name:
-                    self._tasks.pop(i)
-                    logger.info(f"Task removed: {name}")
-                    self._save_state()
-                    return True
-        return False
-
-    def toggle_task(self, name: str, enabled: bool) -> bool:
-        with self._lock:
-            for task in self._tasks:
-                if task.name == name:
-                    task.enabled = enabled
-                    logger.info(f"Task {name}: enabled={enabled}")
-                    if enabled:
-                        task.initialize_next_run()
-                    self._save_state()
-                    return True
-        return False
-
-    def get_status(self) -> List[Dict[str, Any]]:
-        with self._lock:
-            return [t.to_dict() for t in self._tasks]
-
     def _save_state(self) -> None:
         try:
             with self._lock:
@@ -279,6 +216,7 @@ class CronScheduler:
                 with open(tmp_fd, "w", encoding="utf-8") as f:
                     f.write(content)
                 Path(tmp_path).replace(self._tasks_file)
+                logger.debug("Cron state saved successfully")
             except Exception:
                 Path(tmp_path).unlink(missing_ok=True)
                 raise
@@ -287,6 +225,7 @@ class CronScheduler:
 
     def _load_state(self) -> None:
         if not self._tasks_file.exists():
+            logger.debug("No cron state file found, starting fresh")
             return
         try:
             data = json.loads(self._tasks_file.read_text(encoding="utf-8"))

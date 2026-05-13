@@ -1,13 +1,7 @@
 {
   "mcpServers": {
-    "tavily-mcp": {
-      "type": "streamable_http",
-      "url": "https://mcp.api-inference.modelscope.net/ec29937d00914d/mcp",
-      "headers": {
-        "Authorization": "Bearer YOUR_API_KEY_HERE"
-      }
-    },
     "sequential-thinking": {
+      "enabled": false,
       "type": "stdio",
       "command": "mcp-server-sequential-thinking",
       "env": {

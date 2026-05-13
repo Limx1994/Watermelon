@@ -12,18 +12,14 @@ from ..config import config
 
 logger = logging.getLogger(__name__)
 
+
+class InterruptedError(Exception):
+    """Raised when LLM operation is interrupted by stop_event."""
+    pass
+
+
 # LLM constants
 REASONING_BUFFER_THRESHOLD = 50
-
-
-class NetworkError(Exception):
-    """网络错误基类"""
-    pass
-
-
-class NetworkDisconnectedError(NetworkError):
-    """网络断开错误"""
-    pass
 
 
 def is_network_error(e: Exception) -> bool:
@@ -32,8 +28,6 @@ def is_network_error(e: Exception) -> bool:
     if isinstance(e, APIConnectionError):
         return True
     if isinstance(e, (ConnectionError, TimeoutError, OSError)):
-        return True
-    if isinstance(e, NetworkError):
         return True
     error_str = str(e).lower()
     return any(kw in error_str for kw in ("connection", "timeout", "network", "dns", "connect"))
@@ -59,7 +53,8 @@ def load_tools_from_json() -> List[Dict[str, Any]]:
 class LLMClient:
     """OpenAI compatible client for DeepSeek API with thinking mode support"""
 
-    def __init__(self):
+    def __init__(self, stop_event=None):
+        self._stop_event = stop_event
         logger.info(f"Initializing LLM client: model={config.model}, base_url={config.base_url}")
         self.client = OpenAI(
             api_key=config.api_key,
@@ -82,6 +77,21 @@ class LLMClient:
         # Load tools from tools.json
         self.tools = load_tools_from_json()
         logger.debug(f"Loaded {len(self.tools)} tools from tools.json")
+
+    def _interruptible_sleep(self, seconds: float) -> None:
+        """Sleep for up to seconds, checking stop_event every 0.2s.
+
+        Raises InterruptedError if stop_event is set during sleep.
+        """
+        elapsed = 0.0
+        step = 0.2
+        while elapsed < seconds:
+            if self._stop_event and self._stop_event.is_set():
+                logger.info(f"LLM retry sleep interrupted: {elapsed:.1f}s/{seconds:.1f}s")
+                raise InterruptedError("Cancelled during retry sleep")
+            remaining = min(step, seconds - elapsed)
+            time.sleep(remaining)
+            elapsed += remaining
 
     def switch_model(self, model_name: str, client=None) -> None:
         """Switch to a different model at runtime (for degradation recovery).
@@ -136,11 +146,14 @@ class LLMClient:
         # 判断是否为网络错误，使用更长的重试窗口
         for attempt in range(config.max_retries):
             try:
-                return api_client.chat.completions.create(**params)
+                result = api_client.chat.completions.create(**params)
+                if attempt > 0:
+                    logger.debug(f"API call succeeded on attempt {attempt+1}")
+                return result
             except RateLimitError as e:
                 wait = min(2 ** attempt * 2, 60)
                 logger.warning(f"Rate limited, retry in {wait}s (attempt {attempt+1}/{config.max_retries})")
-                time.sleep(wait)
+                self._interruptible_sleep(wait)
                 last_error = e
             except (APIStatusError, APIConnectionError) as e:
                 # Don't retry client errors (4xx except 429)
@@ -148,51 +161,14 @@ class LLMClient:
                     raise
                 wait = min(2 ** attempt, 30)
                 logger.warning(f"API error {e}, retry in {wait}s (attempt {attempt+1}/{config.max_retries})")
-                time.sleep(wait)
+                self._interruptible_sleep(wait)
                 last_error = e
             except Exception as e:
                 wait = min(2 ** attempt, 30)
                 logger.warning(f"Unexpected error {e}, retry in {wait}s (attempt {attempt+1}/{config.max_retries})")
-                time.sleep(wait)
+                self._interruptible_sleep(wait)
                 last_error = e
-        raise last_error
-
-    def _call_with_network_retry(self, params: dict, client=None):
-        """Call the API with extended retry for network errors."""
-        from openai import APIStatusError, APIConnectionError, RateLimitError
-
-        api_client = client or self.client
-        last_error = None
-
-        for attempt in range(config.network_max_retries):
-            try:
-                return api_client.chat.completions.create(**params)
-            except RateLimitError as e:
-                wait = min(config.retry_interval_seconds * (2 ** attempt), 300)
-                logger.warning(f"Rate limited, retry in {wait}s (attempt {attempt+1}/{config.network_max_retries})")
-                time.sleep(wait)
-                last_error = e
-            except (APIStatusError, APIConnectionError) as e:
-                # Don't retry client errors (4xx except 429)
-                if isinstance(e, APIStatusError) and hasattr(e, 'status_code') and 400 <= e.status_code < 500 and e.status_code != 429:
-                    raise
-
-                if is_network_error(e):
-                    wait = min(config.network_retry_interval_seconds * (2 ** attempt), 120)
-                    logger.warning(f"Network error, retry in {wait}s (attempt {attempt+1}/{config.network_max_retries})")
-                else:
-                    wait = min(config.retry_interval_seconds * (2 ** attempt), 60)
-                    logger.warning(f"API error {e}, retry in {wait}s (attempt {attempt+1}/{config.network_max_retries})")
-                time.sleep(wait)
-                last_error = e
-            except Exception as e:
-                if is_network_error(e):
-                    wait = min(config.network_retry_interval_seconds * (2 ** attempt), 120)
-                else:
-                    wait = min(config.retry_interval_seconds * (2 ** attempt), 60)
-                logger.warning(f"Unexpected error {e}, retry in {wait}s (attempt {attempt+1}/{config.network_max_retries})")
-                time.sleep(wait)
-                last_error = e
+        logger.error(f"All retries exhausted for model={self.model}, last error: {last_error}")
         raise last_error
 
     def chat(
@@ -217,14 +193,16 @@ class LLMClient:
             Tuple of (response_content, reasoning_content, usage_dict)
             usage_dict is only available in non-streaming mode
         """
+        t0 = time.monotonic()
         params: Dict[str, Any] = {
             "model": self.model,
             "messages": messages,
             "temperature": self.temperature,
             "top_p": self.top_p,
-            "reasoning_effort": self.reasoning_effort,
             "stream": stream
         }
+        if self.reasoning_effort and self.model and self.model.startswith(("o1", "o3")):
+            params["reasoning_effort"] = self.reasoning_effort
 
         if tools:
             params["tools"] = tools
@@ -232,6 +210,7 @@ class LLMClient:
         if config.max_output_tokens:
             params["max_tokens"] = config.max_output_tokens
 
+        logger.info(f"chat() called: stream={stream}, messages={len(messages)}, tools={len(tools) if tools else 0}")
         if stream and callback:
             logger.debug(f"Streaming chat request with {len(messages)} messages")
             response_content = ""
@@ -289,7 +268,9 @@ class LLMClient:
             if usage_info and usage_callback:
                 usage_callback(usage_info)
 
-            logger.debug(f"Chat completed: {len(response_content)} chars response, {len(reasoning_content)} chars reasoning")
+            elapsed = time.monotonic() - t0
+            logger.info(f"Chat done | model={self.model} | {len(response_content)} chars, {len(reasoning_content)} reasoning | finish={finish_reason} | {elapsed:.1f}s" +
+                        (f" | tokens={usage_info}" if usage_info else ""))
             return response_content, reasoning_content, usage_info, finish_reason
         else:
             logger.debug(f"Non-streaming chat request with {len(messages)} messages")
@@ -307,7 +288,9 @@ class LLMClient:
                     "completion_tokens": response.usage.completion_tokens or 0,
                     "total_tokens": response.usage.total_tokens or 0
                 }
-            logger.debug(f"Non-streaming chat completed: {len(msg.content or '')} chars")
+            elapsed = time.monotonic() - t0
+            logger.info(f"Chat done | model={self.model} | {len(msg.content or '')} chars, {len(reasoning)} reasoning | finish={finish_reason} | {elapsed:.1f}s" +
+                        (f" | tokens={usage}" if usage else ""))
             if usage and usage_callback:
                 usage_callback(usage)
             return msg.content or "", reasoning, usage, finish_reason
@@ -334,9 +317,10 @@ class LLMClient:
             "tools": tools,
             "temperature": self.temperature,
             "top_p": self.top_p,
-            "reasoning_effort": self.reasoning_effort,
             "stream": False
         }
+        if self.reasoning_effort and self.model and self.model.startswith(("o1", "o3")):
+            params["reasoning_effort"] = self.reasoning_effort
 
         if config.max_output_tokens:
             params["max_tokens"] = config.max_output_tokens
@@ -361,7 +345,8 @@ class LLMClient:
         content = message.content or ''
         reasoning = getattr(message, 'reasoning_content', '') or ''
         finish_reason = response.choices[0].finish_reason if response.choices else ""
-        logger.debug(f"get_tool_calls response: {len(tool_calls)} tool calls, finish_reason={finish_reason}")
+        tool_names = [tc["name"] for tc in tool_calls]
+        logger.debug(f"get_tool_calls response: {len(tool_calls)} tool calls {tool_names}, finish_reason={finish_reason}")
         return tool_calls, content, reasoning, finish_reason
 
 
@@ -376,10 +361,16 @@ def create_user_message(content: str) -> Dict[str, Any]:
 
 
 def create_assistant_message(content: str, reasoning_content: str = "") -> Dict[str, Any]:
-    """Create an assistant message dict"""
-    # IMPORTANT: Do NOT include reasoning_content in the message to send to API
-    # It will cause a 400 error. reasoning_content is only for internal tracking.
-    return {"role": "assistant", "content": content}
+    """Create an assistant message dict.
+
+    Includes reasoning_content when present so DeepSeek thinking mode
+    can echo it back on subsequent turns (required by the API).
+    """
+    msg: Dict[str, Any] = {"role": "assistant", "content": content}
+    if reasoning_content:
+        msg["reasoning_content"] = reasoning_content
+        logger.debug(f"create_assistant_message: included reasoning_content ({len(reasoning_content)} chars)")
+    return msg
 
 
 def create_tool_result_message(tool_call_id: str, content: str) -> Dict[str, Any]:

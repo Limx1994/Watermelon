@@ -1,0 +1,1 @@
+Please generate a concise summary (within 500 tokens) for the following conversation history. Extract core themes and tasks, preserve important decisions and conclusions, note files and tools involved.

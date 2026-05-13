@@ -9,8 +9,6 @@ from ..config import config
 
 DEFAULT_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s:%(lineno)d | %(message)s"
 DEFAULT_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
-DEFAULT_MAX_BYTES = 10 * 1024 * 1024  # 10MB
-DEFAULT_BACKUP_COUNT = 5
 
 
 def _ensure_log_directory() -> Path:

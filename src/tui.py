@@ -11,7 +11,7 @@ from prompt_toolkit.application import Application
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.clipboard.pyperclip import PyperclipClipboard  # Windows system clipboard
 from prompt_toolkit.document import Document
-from prompt_toolkit.filters import Condition
+from prompt_toolkit.filters import Condition, has_focus
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.layout import Layout, HSplit, VSplit, Window, ScrollOffsets
@@ -20,14 +20,12 @@ from prompt_toolkit.layout.dimension import LayoutDimension as D
 from prompt_toolkit.layout.margins import ScrollbarMargin
 from prompt_toolkit.completion import DynamicCompleter, DummyCompleter
 from prompt_toolkit.lexers import Lexer
-from prompt_toolkit.mouse_events import MouseEventType, MouseButton, MouseEventType as MouseEvent
+from prompt_toolkit.mouse_events import MouseEventType, MouseButton
 from prompt_toolkit.styles import Style
 from prompt_toolkit.output import create_output
-from prompt_toolkit.output.vt100 import Vt100_Output
 
 from .agent import Agent, AgentCancelledError
 from .config import config
-from .memory import memory
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +33,13 @@ logger = logging.getLogger(__name__)
 POLL_INTERVAL = 0.03
 PROGRESS_DISPLAY_THRESHOLD = 0.5
 PROGRESS_BAR_WIDTH = 20
+
+
+def _clean_cr(text: str) -> str:
+    """Strip \\r from text to prevent ^M display in prompt_toolkit."""
+    if '\r' not in text:
+        return text
+    return text.replace('\r\n', '\n').replace('\r', '\n')
 
 
 class OutputLexer(Lexer):
@@ -150,7 +155,7 @@ class _OutputWindow(Window):
 class _InputWindow(Window):
     """自定义输入窗口，支持右键粘贴"""
     def mouse_handler(self, mouse_event):
-        logger.info(f"[MOUSE] _InputWindow: type={mouse_event.event_type} "
+        logger.debug(f"[MOUSE] _InputWindow: type={mouse_event.event_type} "
                      f"button={mouse_event.button} pos={mouse_event.position}")
         if (mouse_event.event_type == MouseEventType.MOUSE_DOWN
             and mouse_event.button == MouseButton.RIGHT):  # 右键
@@ -158,14 +163,29 @@ class _InputWindow(Window):
                 buf = self.content.buffer
                 clipboard_data = self.app.clipboard.get_data()
                 if clipboard_data and hasattr(clipboard_data, 'text') and clipboard_data.text:
-                    buf.insert_text(clipboard_data.text)
-                    logger.info(f"[MOUSE] 右键粘贴成功: {clipboard_data.text[:30]}")
+                    buf.insert_text(_clean_cr(clipboard_data.text))
+                    logger.debug(f"[MOUSE] 右键粘贴成功: {clipboard_data.text[:30]}")
                 else:
-                    logger.info("[MOUSE] 右键粘贴: 剪切板为空")
+                    logger.debug("[MOUSE] 右键粘贴: 剪切板为空")
             except Exception as e:
                 logger.warning(f"右键粘贴失败: {e}")
             return None  # 事件已处理
         return super().mouse_handler(mouse_event)
+
+
+def _create_platform_output():
+    """Create platform-appropriate prompt_toolkit Output.
+
+    Tries prompt_toolkit's create_output() first, which detects
+    Windows10_Output / Win32Output / Vt100_Output based on platform.
+    Falls back to Vt100_Output if create_output() fails.
+    """
+    try:
+        return create_output()
+    except Exception:
+        logger.warning("create_output() failed, falling back to Vt100_Output")
+        from prompt_toolkit.output.vt100 import Vt100_Output
+        return Vt100_Output.from_pty(sys.stdout)
 
 
 class SimpleTUI:
@@ -182,6 +202,10 @@ class SimpleTUI:
 
         # Per-line styles for the Lexer (rebuilt each poll cycle from fragments)
         self._line_styles: list[str] = []
+
+        # Incremental rebuild cache
+        self._cached_frag_count: int = 0
+        self._cached_full_text: str = ""
 
         # Agent safety
         self._agent_running = False
@@ -248,8 +272,6 @@ class SimpleTUI:
         self._style = self._create_style()
 
         # Layout and key bindings
-        # Filter for Ctrl+C: skip exit if output has selection (allows copy)
-        self._exit_filter = Condition(lambda: not self._output_has_selection())
         self._layout = self._create_layout()
         self._kb = self._create_key_bindings()
 
@@ -264,7 +286,7 @@ class SimpleTUI:
             full_screen=True,
             mouse_support=True,
             clipboard=PyperclipClipboard(),
-            output=Vt100_Output.from_pty(sys.stdout),
+            output=_create_platform_output(),
         )
 
         # Input history list for up/down navigation
@@ -357,10 +379,6 @@ class SimpleTUI:
             return [("class:prompt", "/ ")]
         return [("class:prompt", "> ")]
 
-    def _output_has_selection(self) -> bool:
-        """Check if output buffer has text selection (for Ctrl+C copy vs exit)."""
-        return self._output_buffer.selection_state is not None
-
     def _line_to_cursor_pos(self, line: int, full_text: str) -> int:
         """Convert logical line number to character position in buffer text."""
         lines = full_text.split('\n')
@@ -406,13 +424,16 @@ class SimpleTUI:
         """Trim fragment list if it exceeds MAX_FRAGMENTS to prevent unbounded growth."""
         with self._fragments_lock:
             if len(self._fragments) > self.MAX_FRAGMENTS:
+                old_count = len(self._fragments)
                 self._fragments = self._fragments[-self.MAX_FRAGMENTS:]
+                logger.warning(f"Fragments pruned: {old_count} -> {self.MAX_FRAGMENTS}")
 
     def _rebuild_buffer(self) -> None:
         """Rebuild Buffer document and line_styles from fragments.
 
         Takes an atomic snapshot of fragments under lock, then builds
         line_styles and full_text from the snapshot to ensure consistency.
+        Uses incremental updates when only new fragments are appended.
         """
         with self._fragments_lock:
             fragments = list(self._fragments)
@@ -420,33 +441,100 @@ class SimpleTUI:
             cursor_pos_current = self._output_buffer.cursor_position
 
         if not fragments:
-            self._line_styles = []
-            sel_state = self._output_buffer.selection_state
-            self._output_buffer.set_document(Document(""), bypass_readonly=True)
-            self._output_buffer.selection_state = sel_state
-            self.app.invalidate()
+            if self._line_styles:
+                self._line_styles = []
+                self._cached_frag_count = 0
+                self._cached_full_text = ""
+                sel_state = self._output_buffer.selection_state
+                self._output_buffer.set_document(Document(""), bypass_readonly=True)
+                self._output_buffer.selection_state = sel_state
+                self.app.invalidate()
             return
 
         full_text = ''.join(text for _, text in fragments)
 
-        # Build line_styles from the snapshot — guaranteed consistent
-        line_styles = []
-        frag_idx = 0
-        frag_offset = 0
-        current_style = fragments[0][0] if fragments else ""
+        # Skip rebuild if text unchanged
+        if full_text == self._cached_full_text:
+            return
 
-        for ch_idx, ch in enumerate(full_text):
-            while frag_idx < len(fragments) and ch_idx >= frag_offset + len(fragments[frag_idx][1]):
-                frag_offset += len(fragments[frag_idx][1])
-                frag_idx += 1
-            if frag_idx < len(fragments):
-                current_style = fragments[frag_idx][0]
-            if ch == '\n' or ch_idx == len(full_text) - 1:
+        # Determine if we can do incremental update
+        can_incremental = (
+            self._cached_frag_count > 0
+            and len(fragments) >= self._cached_frag_count
+            and full_text.startswith(self._cached_full_text)
+        )
+
+        if can_incremental:
+            # Only process new lines from the appended text
+            old_line_count = len(self._line_styles)
+            old_text_len = len(self._cached_full_text)
+
+            # Find where new text starts (skip already processed)
+            new_text = full_text[old_text_len:]
+
+            # Find the last incomplete line in old text (if it didn't end with \n)
+            if self._cached_full_text and not self._cached_full_text.endswith('\n'):
+                # Last line is incomplete, need to re-process it
+                start_offset = old_text_len - len(self._cached_full_text.split('\n')[-1])
+                new_text = full_text[start_offset:]
+                old_line_count = max(0, old_line_count - 1)
+
+            # Process new text to find new lines
+            new_styles = []
+            frag_idx = 0
+            frag_offset = 0
+            current_style = ""
+
+            # Find the fragment that contains start_offset
+            if can_incremental:
+                start_offset = len(self._cached_full_text) if old_text_len == len(self._cached_full_text) else old_text_len
+                for i, (style, text) in enumerate(fragments):
+                    if frag_offset + len(text) > start_offset:
+                        frag_idx = i
+                        current_style = style
+                        break
+                    frag_offset += len(text)
+
+            # Process from current position
+            for ch_idx, ch in enumerate(new_text):
+                abs_idx = old_text_len + ch_idx if old_text_len == len(self._cached_full_text) else start_offset + ch_idx
+                while frag_idx < len(fragments) and abs_idx >= frag_offset + len(fragments[frag_idx][1]):
+                    frag_offset += len(fragments[frag_idx][1])
+                    frag_idx += 1
+                if frag_idx < len(fragments):
+                    current_style = fragments[frag_idx][0]
+                if ch == '\n' or abs_idx == len(full_text) - 1:
+                    new_styles.append(current_style)
+
+            # Merge with existing styles
+            line_styles = self._line_styles[:old_line_count] + new_styles
+        else:
+            # Full rebuild -- O(N) in line count
+            line_styles = []
+            frag_idx = 0
+            frag_offset = 0
+            current_style = fragments[0][0] if fragments else ""
+
+            lines = full_text.split('\n')
+            line_start = 0
+            for line_idx, line in enumerate(lines):
+                while (frag_idx < len(fragments)
+                       and line_start >= frag_offset
+                           + len(fragments[frag_idx][1])):
+                    frag_offset += len(fragments[frag_idx][1])
+                    frag_idx += 1
+                if frag_idx < len(fragments):
+                    current_style = fragments[frag_idx][0]
                 line_styles.append(current_style)
+                line_start += len(line) + 1
 
-        # Trim to match document.lines length (trailing \n may cause off-by-one)
-        doc_line_count = full_text.count('\n') + (1 if full_text and not full_text.endswith('\n') else 0)
-        line_styles = line_styles[:doc_line_count]
+            # Remove trailing empty string from split if text ends with \n
+            if full_text.endswith('\n') and line_styles:
+                line_styles = line_styles[:-1]
+
+        # Update cache
+        self._cached_frag_count = len(fragments)
+        self._cached_full_text = full_text
 
         if auto_scroll:
             cursor_pos = len(full_text)
@@ -455,19 +543,30 @@ class SimpleTUI:
 
         # Apply computed state atomically
         self._line_styles = line_styles
-        # Preserve selection state — set_document() clears it via _text_changed
-        sel_state = self._output_buffer.selection_state
+        # Preserve selection state when agent is idle and content unchanged
+        sel_state = None
+        if not self._agent_running:
+            sel_state = self._output_buffer.selection_state
+            if sel_state is not None:
+                current_text = self._output_buffer.document.text
+                if current_text != full_text:
+                    sel_state = None  # Content changed, selection is stale
         # Save scroll position before buffer update
         saved_vertical_scroll = self.output_window.vertical_scroll
         # Use set_document to properly fire on_text_changed event chain
         new_doc = Document(text=full_text, cursor_position=cursor_pos)
         self._output_buffer.set_document(new_doc, bypass_readonly=True)
-        # Restore selection (cleared by _text_changed)
-        self._output_buffer.selection_state = sel_state
+        # Restore selection only if agent is idle and positions are valid
+        if sel_state is not None:
+            try:
+                if (0 <= sel_state.original_cursor_position <= len(full_text)
+                        and 0 <= self._output_buffer.cursor_position <= len(full_text)):
+                    self._output_buffer.selection_state = sel_state
+            except (AttributeError, TypeError):
+                pass
         # Restore scroll position when user has manually scrolled
         if not auto_scroll:
             self.output_window.vertical_scroll = saved_vertical_scroll
-        # Invalidate after all state is consistent
         self.app.invalidate()
 
     # ── Layout ───────────────────────────────────────────
@@ -523,15 +622,30 @@ class SimpleTUI:
 
         @kb.add(Keys.ControlC, eager=True)
         def copy_or_quit(event):
-            # If output has selection, copy text instead of exiting
-            if self._output_has_selection():
+            try:
+                # 优先处理输入框的选中文本
+                if self.input_buffer.selection_state is not None:
+                    data = self.input_buffer.copy_selection()
+                    if data and data.text:
+                        event.app.clipboard.set_data(data)
+                    self.input_buffer.selection_state = None
+                    event.app.invalidate()
+                    return
+                # 然后处理输出区的选中文本 — 直接读取 selection_state 并一次性完成复制
                 buf = self._output_buffer
-                if buf.selection_state is not None:
+                sel_state = buf.selection_state
+                if sel_state is not None:
                     data = buf.copy_selection()
                     if data and data.text:
                         event.app.clipboard.set_data(data)
-                return
+                    buf.selection_state = None
+                    event.app.invalidate()
+                    return
+            except Exception as e:
+                logger.error(f"[KEY] Ctrl+C 异常: {type(e).__name__}: {e}", exc_info=True)
+            # No selection — exit or cancel agent
             if self._agent_running:
+                logger.info("User requested exit via Ctrl+C")
                 self._agent_stop_event.set()
                 self._output_queue.put(("text", "\n[Cancelling agent...]\n"))
                 if hasattr(self, '_cron_scheduler') and self._cron_scheduler:
@@ -542,6 +656,7 @@ class SimpleTUI:
 
         @kb.add(Keys.ControlQ, eager=True)
         def quit(event):
+            logger.info("User requested quit via Ctrl+Q")
             if self._agent_running:
                 self._agent_stop_event.set()
                 self._output_queue.put(("text", "\n[Cancelling agent...]\n"))
@@ -557,7 +672,6 @@ class SimpleTUI:
                 self._fragments.clear()
             self._auto_scroll = True
             self._rebuild_buffer()
-            memory.clear()
 
         @kb.add(Keys.Up)
         def history_up(event):
@@ -627,6 +741,7 @@ class SimpleTUI:
                 self._execute_slash_command(cmd_text)
                 return
             buf.text = ""
+            self._compact_indicator = ""
             self._input_history.append(text)
             self._history_index = len(self._input_history)
             self._output_queue.put(("user_input", text))
@@ -678,15 +793,21 @@ class SimpleTUI:
             buf.set_document(new_doc, bypass_readonly=True)
 
         # Ctrl+V: paste from clipboard
-        @kb.add(Keys.ControlV)
+        @kb.add(Keys.ControlV, eager=True)
         def ctrl_v_paste(event):
             """Ctrl+V paste from clipboard"""
-            data = event.app.clipboard.get_data()
-            if data:
-                event.app.current_buffer.insert_text(data.text)
+            try:
+                # 清除选择状态（粘贴时替换选中文本）
+                self.input_buffer.selection_state = None
+                data = event.app.clipboard.get_data()
+                if data and hasattr(data, 'text'):
+                    event.app.current_buffer.insert_text(_clean_cr(data.text))
+                    logger.debug(f"[KEY] Ctrl+V: 粘贴 {len(data.text)} 字符")
+            except Exception as e:
+                logger.warning(f"[KEY] Ctrl+V 粘贴失败: {e}")
 
         # Left: move cursor,跨行移动到上一行末尾
-        @kb.add(Keys.Left)
+        @kb.add(Keys.Left, filter=has_focus(self.input_buffer))
         def move_left(event):
             buf = event.app.current_buffer
             text = buf.text
@@ -708,7 +829,7 @@ class SimpleTUI:
                 buf.cursor_left()
 
         # Right: move cursor,跨行移动到下一行开头
-        @kb.add(Keys.Right)
+        @kb.add(Keys.Right, filter=has_focus(self.input_buffer))
         def move_right(event):
             buf = event.app.current_buffer
             text = buf.text
@@ -726,6 +847,44 @@ class SimpleTUI:
             else:
                 buf.cursor_right()
 
+        # Ctrl+A: select all text in input buffer
+        @kb.add(Keys.ControlA, filter=has_focus(self.input_buffer))
+        def select_all_input(event):
+            buf = self.input_buffer
+            text_len = len(buf.text)
+            if text_len == 0:
+                logger.debug("[KEY] Ctrl+A: 输入框为空，忽略")
+                return
+            from prompt_toolkit.selection import SelectionState
+            buf.selection_state = SelectionState(original_cursor_position=0)
+            buf.cursor_position = text_len
+            logger.debug(f"[KEY] Ctrl+A: 全选 {text_len} 个字符")
+            event.app.invalidate()
+
+        # Delete: delete selected text or character after cursor
+        @kb.add(Keys.Delete, filter=has_focus(self.input_buffer))
+        def delete_selected(event):
+            buf = self.input_buffer
+            if buf.selection_state is not None:
+                buf.cut_selection()
+                buf.selection_state = None
+                logger.debug("[KEY] Delete: 删除选中文本")
+                event.app.invalidate()
+            else:
+                buf.delete(1)
+
+        # Backspace: delete selected text or character before cursor
+        @kb.add(Keys.Backspace, filter=has_focus(self.input_buffer))
+        def backspace_selected(event):
+            buf = self.input_buffer
+            if buf.selection_state is not None:
+                buf.cut_selection()
+                buf.selection_state = None
+                logger.debug("[KEY] Backspace: 删除选中文本")
+                event.app.invalidate()
+            else:
+                buf.delete_before_cursor(1)
+
         return kb
 
     # ── Output Handling ──────────────────────────────────
@@ -738,6 +897,8 @@ class SimpleTUI:
 
     def _run_agent(self, user_input: str) -> None:
         """Run agent in background thread"""
+        import time as _time
+        t0 = _time.monotonic()
         logger.info(f"Agent execution started: {user_input[:80]}")
         try:
             self.agent.run(user_input)
@@ -747,6 +908,8 @@ class SimpleTUI:
             logger.error(f"Agent execution failed: {e}")
             self._output_queue.put(("text", f"\nError: {e}\n"))
         finally:
+            elapsed = _time.monotonic() - t0
+            logger.info(f"Agent execution finished in {elapsed:.1f}s")
             self._output_queue.put(("_agent_done", ""))
 
     def _execute_slash_command(self, cmd_text: str) -> None:
@@ -778,6 +941,7 @@ class SimpleTUI:
         try:
             cmd.handler(self, args)
         except Exception as e:
+            logger.error(f"Command error ({cmd_text}): {e}", exc_info=True)
             with self._fragments_lock:
                 self._fragments.append(("class:error",
                     f"命令错误: {type(e).__name__}: {e}\n"))
@@ -795,43 +959,48 @@ class SimpleTUI:
         """Background async task: poll queue and update UI.
 
         Drains ALL available items each cycle to avoid per-token latency.
+        Only rebuilds buffer when fragment-modifying messages are processed.
         """
         while True:
-            processed_any = False
+            has_fragment_update = False
+            agent_done = False
             while True:
                 try:
                     msg_type, text = self._output_queue.get_nowait()
-                    processed_any = True
                 except queue.Empty:
                     break
 
+                text = _clean_cr(text)
+
                 # Process one message
                 if msg_type == "_agent_done":
-                    self._agent_running = False
-                    logger.debug("Agent running: False (_agent_done)")
-                    if self._exit_requested:
-                        self._exit_requested = False
-                        self.app.exit()
+                    agent_done = True
                     continue
 
                 elif msg_type == "thinking":
                     with self._fragments_lock:
                         self._fragments.append(("class:thinking", text))
+                    has_fragment_update = True
                 elif msg_type == "answer_start":
                     with self._fragments_lock:
                         self._fragments.append(("class:separator", "\n━━━ 回答 ━━━\n"))
+                    has_fragment_update = True
                 elif msg_type == "answer":
                     with self._fragments_lock:
                         self._fragments.append(("", text))
+                    has_fragment_update = True
                 elif msg_type == "user_input":
                     with self._fragments_lock:
                         self._fragments.append(("class:user", f"\n> {text}\n"))
+                    has_fragment_update = True
                 elif msg_type == "tool_call":
                     with self._fragments_lock:
                         self._fragments.append(("class:tool_call", text))
+                    has_fragment_update = True
                 elif msg_type == "tool_result":
                     with self._fragments_lock:
                         self._fragments.append(("class:tool_result", text))
+                    has_fragment_update = True
                 elif msg_type == "token_info":
                     self._token_text = text
                     self.app.invalidate()
@@ -847,15 +1016,19 @@ class SimpleTUI:
                 elif msg_type == "cron_notify":
                     with self._fragments_lock:
                         self._fragments.append(("class:autonomous", f"\n[Cron: {text}]\n"))
+                    has_fragment_update = True
                 elif msg_type == "sleep_status":
                     with self._fragments_lock:
                         self._fragments.append(("class:thinking", f"\n[Sleep: {text}]\n"))
+                    has_fragment_update = True
                 elif msg_type == "command":
                     with self._fragments_lock:
                         self._fragments.append(("class:command", text))
+                    has_fragment_update = True
                 elif msg_type == "error":
                     with self._fragments_lock:
                         self._fragments.append(("class:error", text))
+                    has_fragment_update = True
                 elif msg_type == "_autonomous_done":
                     self._agent_running = False
                     logger.debug("Agent running: False (_autonomous_done)")
@@ -865,11 +1038,20 @@ class SimpleTUI:
                 else:
                     with self._fragments_lock:
                         self._fragments.append(("", text))
+                    has_fragment_update = True
 
-            # After draining: prune fragments and rebuild buffer + line styles
-            if processed_any:
+            # After draining: prune fragments and rebuild buffer only if needed
+            if has_fragment_update:
                 self._prune_fragments()
                 self._rebuild_buffer()
+
+            # Set agent_running=False after buffer rebuild to preserve selection
+            if agent_done:
+                self._agent_running = False
+                logger.debug("Agent running: False (_agent_done)")
+                if self._exit_requested:
+                    self._exit_requested = False
+                    self.app.exit()
 
             await asyncio.sleep(POLL_INTERVAL)
 
@@ -899,10 +1081,23 @@ class SimpleTUI:
     def run(self) -> None:
         """Run the TUI Application"""
         logger.info("TUI application starting")
+
+        # Register SIGINT handler to ensure Ctrl+C sets stop_event
+        import signal
+
+        def _sigint_handler(signum, frame):
+            logger.info("SIGINT signal received")
+            self._agent_stop_event.set()
+            raise KeyboardInterrupt("SIGINT received")
+
+        signal.signal(signal.SIGINT, _sigint_handler)
+        logger.debug("SIGINT handler registered")
+
         self.agent = Agent(
             output_callback=self._on_output,
             stop_event=self._agent_stop_event,
         )
+        logger.info("Agent created")
         self._print_welcome()
         self._rebuild_buffer()
 
@@ -912,6 +1107,7 @@ class SimpleTUI:
             tick_interval_minutes=config.tick_interval_minutes
         )
         self._cron_scheduler.start()
+        logger.info("CronScheduler started")
         self._fragments.append(("class:autonomous",
             f"\n[自主模式已启用 — {len(config.cron_tasks)} 个定时任务]\n"))
 
@@ -941,7 +1137,10 @@ def run_tui() -> None:
         tui = SimpleTUI()
         tui.run()
     except KeyboardInterrupt:
-        pass
+        logger.info("TUI exited via KeyboardInterrupt")
     except Exception as e:
         import traceback
-        logger.error(f"TUI fatal error: {e}\n{traceback.format_exc()}")
+        tb = traceback.format_exc()
+        logger.error(f"TUI fatal error: {e}\n{tb}")
+    finally:
+        logger.info("TUI exited")

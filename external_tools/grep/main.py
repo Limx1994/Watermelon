@@ -4,8 +4,6 @@
 import argparse
 import json
 import re
-import sys
-from collections import defaultdict
 from pathlib import Path
 
 # 文件类型到 glob 模式的映射
@@ -100,7 +98,6 @@ def build_file_list(root: Path, path: Path, glob_patterns: list, type_filter: st
 
     # 收集所有候选文件
     candidates = []
-    recursive = True
     if glob_patterns:
         for gp in glob_patterns:
             candidates.extend(path.rglob(gp))
@@ -289,7 +286,6 @@ def main():
     parser.add_argument("--head-limit", type=int, default=250, help="Limit number of results (0=unlimited)")
     parser.add_argument("--offset", type=int, default=0, help="Skip first N results")
     parser.add_argument("--multiline", action="store_true", help="Enable multiline mode")
-    parser.add_argument("--recursive", default="true", help="Search recursively (true/false)")
 
     args = parser.parse_args()
 
@@ -302,14 +298,12 @@ def main():
     else:
         resolved = root.resolve()
 
-    recursive = args.recursive.lower() in ("true", "1", "yes")
-
     # 解析 glob 模式
     glob_patterns = []
     if args.glob:
         glob_patterns = parse_glob_patterns(args.glob)
 
-    # 处理路径：非递归时只搜索当前目录
+    # 处理路径
     search_path = resolved if resolved.is_dir() else resolved.parent
 
     try:
