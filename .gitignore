@@ -12,7 +12,7 @@ venv/
 *.log
 .DS_Store
 config.json
-config/
+config/mcp.json
 
 # Archives
 *.7z
