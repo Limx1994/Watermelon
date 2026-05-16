@@ -162,7 +162,6 @@ AGImyCLI/
 ├── config.json.example        # Configuration template (root copy)
 ├── requirements.txt           # Python dependencies
 ├── README.md                  # This file
-├── README_zh.md               # Readme (Chinese)
 └── LICENSE                    # License file
 ```
 
