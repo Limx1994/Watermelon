@@ -73,91 +73,101 @@ python -m src
 ```
 AGImyCLI/
 ├── src/
-│   ├── main.py              # 入口文件
-│   ├── tui.py               # TUI 界面
-│   ├── agent.py             # 核心 Agent 循环
-│   ├── config.py            # 配置管理
-│   ├── memory.py            # 记忆和对话历史
-│   ├── persistent_memory.py # 跨会话持久化记忆引擎
+│   ├── __init__.py            # 包初始化
+│   ├── __main__.py            # 入口：python -m src
+│   ├── core/
+│   │   ├── agent.py           # 核心 Agent 循环
+│   │   ├── config.py          # 配置管理
+│   │   ├── main.py            # 主入口文件
+│   │   └── tui.py             # TUI 界面
 │   ├── llm/
-│   │   └── client.py        # LLM 客户端（兼容 DeepSeek API，可中断 sleep）
+│   │   └── client.py          # LLM 客户端（兼容 DeepSeek API，可中断 sleep）
 │   ├── tools/
-│   │   ├── base.py          # 工具基类和 ToolResult
-│   │   ├── registry.py      # 工具注册表（单例模式）
-│   │   ├── loader.py        # 外部工具加载器
-│   │   ├── external.py      # 外部 CLI 工具执行器
-│   │   ├── sleep.py         # Sleep 工具（自主模式空闲等待）
-│   │   └── memory_tool.py   # 持久化记忆工具（LLM 可调用）
+│   │   ├── base.py            # 工具基类和 ToolResult
+│   │   ├── registry.py        # 工具注册表（单例模式）
+│   │   ├── loader.py          # 外部工具加载器
+│   │   ├── external.py        # 外部 CLI 工具执行器
+│   │   ├── sleep.py           # Sleep 工具（自主模式空闲等待）
+│   │   ├── memory_tool.py     # 持久化记忆工具（LLM 可调用）
+│   │   └── implementations/   # 编译后的 .exe 工具
+│   │       ├── read_file/     # 文件读取工具
+│   │       ├── write_file/    # 文件写入工具
+│   │       ├── winshell/      # Shell 执行器（别名解析）
+│   │       ├── grep/          # 内容搜索工具
+│   │       ├── glob/          # 文件模式匹配工具
+│   │       └── edit/          # 字符串替换工具
 │   ├── commands/
-│   │   ├── __init__.py      # 包初始化
-│   │   ├── registry.py      # 斜杠命令注册表（CommandRegistry，SlashCommand）
-│   │   ├── core.py          # 内置斜杠命令（/help，/model，/save 等）
-│   │   └── completer.py     # 斜杠命令 Tab 补全（SlashCommandCompleter）
+│   │   ├── __init__.py        # 包初始化
+│   │   ├── registry.py        # 斜杠命令注册表（CommandRegistry，SlashCommand）
+│   │   ├── core.py            # 内置斜杠命令（/help，/model，/save 等）
+│   │   └── completer.py       # 斜杠命令 Tab 补全（SlashCommandCompleter）
 │   ├── cron/
-│   │   └── scheduler.py     # Cron 调度器（CronScheduler，CronTask）
+│   │   └── scheduler.py       # Cron 调度器（CronScheduler，CronTask）
 │   ├── mcp/
-│   │   ├── base.py          # 抽象 MCP 客户端基类
-│   │   ├── protocol.py      # JSON-RPC 2.0 协议
-│   │   ├── client.py        # MCP 客户端工厂（create_mcp_client）
-│   │   ├── manager.py       # MCP 客户端管理器
-│   │   ├── index.py         # 工具名到客户端的索引
-│   │   ├── persistence.py   # MCP 数据持久化
-│   │   ├── stdio_client.py  # 基于 Stdio 的 MCP 客户端
-│   │   └── http_client.py   # 基于 HTTP 的 MCP 客户端
+│   │   ├── base.py            # 抽象 MCP 客户端基类
+│   │   ├── protocol.py        # JSON-RPC 2.0 协议
+│   │   ├── client.py          # MCP 客户端工厂（create_mcp_client）
+│   │   ├── manager.py         # MCP 客户端管理器
+│   │   ├── index.py           # 工具名到客户端的索引
+│   │   ├── persistence.py     # MCP 数据持久化
+│   │   ├── stdio_client.py    # 基于 Stdio 的 MCP 客户端
+│   │   └── http_client.py     # 基于 HTTP 的 MCP 客户端
 │   ├── skills/
-│   │   ├── __init__.py      # 技能系统初始化（init_skills）
-│   │   ├── definition.py    # SkillDefinition 数据类
-│   │   ├── loader.py        # SKILL.md 解析和加载器
-│   │   ├── registry.py      # SkillRegistry 单例
-│   │   ├── commands.py      # 技能执行处理器 + /skills 命令
-│   │   └── tool.py          # SkillTool（LLM 可调用的技能工具）
+│   │   ├── __init__.py        # 技能系统初始化（init_skills）
+│   │   ├── definition.py      # SkillDefinition 数据类
+│   │   ├── loader.py          # SKILL.md 解析和加载器
+│   │   ├── registry.py        # SkillRegistry 单例
+│   │   ├── commands.py        # 技能执行处理器 + /skills 命令
+│   │   ├── tool.py            # SkillTool（LLM 可调用的技能工具）
+│   │   └── definitions/       # SKILL.md 文件
+│   │       └── code-review/   # 示例：代码审查技能
+│   │           └── SKILL.md
+│   ├── memory/
+│   │   ├── memory.py          # 记忆和对话历史
+│   │   └── persistent_memory.py # 跨会话持久化记忆引擎
+│   ├── prompts/
+│   │   ├── system/            # 系统提示词（6 个文件）
+│   │   │   ├── intro.md
+│   │   │   ├── system_rules.md
+│   │   │   ├── doing_tasks.md
+│   │   │   ├── tool_usage.md
+│   │   │   ├── tone_style.md
+│   │   │   └── output_efficiency.md
+│   │   ├── service/           # 服务提示词
+│   │   │   ├── compact_resume.md
+│   │   │   ├── summary_system.md
+│   │   │   └── summary_template.md
+│   │   ├── recovery/          # 恢复提示词
+│   │   │   ├── max_tokens_recovery.md
+│   │   │   ├── context_too_long.md
+│   │   │   └── token_budget_nudge.md
+│   │   └── autonomous/
+│   │       └── instructions.md # 自主模式行为指令
 │   └── utils/
-│       ├── path.py          # 路径工具函数
-│       ├── token_counter.py # Token 计数
-│       └── logging.py       # 日志工具
-├── external_tools/           # 外部编译的 .exe 工具
-│   ├── read_file/           # 文件读取工具
-│   ├── write_file/          # 文件写入工具
-│   ├── winshell/            # Shell 执行器（别名解析）
-│   ├── grep/                # 内容搜索工具
-│   ├── glob/                 # 文件模式匹配工具
-│   └── edit/                 # 字符串替换工具
-├── skills/                   # 技能定义（SKILL.md 文件）
-│   └── code-review/         # 示例：代码审查技能
+│       ├── path.py            # 路径工具函数
+│       ├── token_counter.py   # Token 计数
+│       ├── logging.py         # 日志工具
+│       └── tool_result_persistence.py # 工具结果持久化
+├── data/                      # 运行时数据（已 gitignore）
+│   ├── logs/                  # 日志文件
+│   ├── memory/                # 会话历史和持久化记忆文件
+│   │   └── tool_results/      # 缓存的工具结果
+│   └── mcpdata/               # MCP 持久化数据
+├── skills/                    # 技能定义（SKILL.md 文件）
+│   └── code-review/           # 示例：代码审查技能
 │       └── SKILL.md
-├── prompts/                 # 提示词模板
-│   ├── system/              # 系统提示词（6 个文件）
-│   │   ├── intro.md
-│   │   ├── system_rules.md
-│   │   ├── doing_tasks.md
-│   │   ├── tool_usage.md
-│   │   ├── tone_style.md
-│   │   └── output_efficiency.md
-│   ├── service/             # 服务提示词
-│   │   ├── compact_resume.md
-│   │   ├── summary_system.md
-│   │   └── summary_template.md
-│   ├── recovery/            # 恢复提示词
-│   │   ├── max_tokens_recovery.md
-│   │   ├── context_too_long.md
-│   │   └── token_budget_nudge.md
-│   └── autonomous/
-│       └── instructions.md  # 自主模式行为指令
-├── memory/                  # 对话和持久化记忆存储
-│   ├── *.md                 # 持久化记忆文件（YAML frontmatter）
-│   ├── MEMORY.md            # 持久化记忆索引（自动生成）
-│   └── history/             # 归档会话历史
-├── mcpdata/                 # MCP 持久化数据
-├── logs/                    # 日志文件
-├── config/                  # 配置文件
-│   ├── mcp.json                 # MCP 服务器配置
-│   ├── tools.json               # 工具定义
-│   └── scheduled_tasks.json     # Cron 任务状态（自动生成）
-├── config.json              # 应用配置
-├── requirements.txt         # Python 依赖
-├── README.md                # 说明文档（英文）
-├── README_zh.md            # 本文件
-└── LICENSE                  # 许可证文件
+├── config/                    # 配置文件
+│   ├── config.json            # 应用配置（已 gitignore）
+│   ├── config.json.example    # 配置模板
+│   ├── mcp.json               # MCP 服务器配置（已 gitignore）
+│   ├── mcp.json.example       # MCP 配置模板
+│   ├── tools.json             # 工具定义
+│   └── scheduled_tasks.json   # Cron 任务状态（自动生成）
+├── config.json.example        # 配置模板（根目录副本）
+├── requirements.txt           # Python 依赖
+├── README.md                  # 说明文档（英文）
+├── README_zh.md               # 本文件
+└── LICENSE                    # 许可证文件
 ```
 
 ## 配置说明
@@ -200,6 +210,8 @@ AGImyCLI/
 | | `system_tool_usage` | 工具使用规则路径 | `./prompts/system/tool_usage.md` |
 | | `system_tone_style` | 语气风格指南路径 | `./prompts/system/tone_style.md` |
 | | `system_output_efficiency` | 输出效率规则路径 | `./prompts/system/output_efficiency.md` |
+
+注意：提示词文件已移至 `src/prompts/`。如需更新，请将上述路径在 `config/config.json` 中修改为 `./src/prompts/...`。
 
 ### compact — 上下文压缩设置
 
@@ -268,7 +280,7 @@ AGImyCLI/
 | `summary_system` | 摘要生成的系统提示词 |
 | `summary_template` | 摘要生成模板（支持 `{messages}` 占位符） |
 
-所有提示词可通过编辑 `prompts/` 目录下的 `.md` 文件自定义。路径为空或文件缺失时使用内置默认字符串。
+所有提示词可通过编辑 `src/prompts/` 目录下的 `.md` 文件自定义。路径为空或文件缺失时使用内置默认字符串。
 
 ### config/mcp.json — MCP 服务器配置
 
@@ -298,12 +310,12 @@ AGImyCLI/
 
 | 工具 | 命令 | 说明 |
 |------|------|------|
-| `read_file` | `external_tools/read_file/dist/read_file.exe` | 读取文件内容（文本/图片/PDF/Notebook，支持 offset/limit/pages） |
-| `write_file` | `external_tools/write_file/dist/write_file.exe` | 写入文件内容 |
-| `shell` | `external_tools/winshell/dist/winshell.exe` | 执行 PowerShell 命令（别名解析、引号感知操作符转换、复杂脚本使用 .ps1，超时单位为秒） |
-| `grep` | `external_tools/grep/dist/grep.exe` | 搜索文件内容（正则，输出模式，上下文，类型过滤，分页） |
-| `glob` | `external_tools/glob/dist/glob.exe` | 按模式查找文件（最多 50 条） |
-| `edit` | `external_tools/edit/dist/edit.exe` | 精确字符串替换（引号规范化，replace_all 支持） |
+| `read_file` | `src/tools/implementations/read_file/dist/read_file.exe` | 读取文件内容（文本/图片/PDF/Notebook，支持 offset/limit/pages） |
+| `write_file` | `src/tools/implementations/write_file/dist/write_file.exe` | 写入文件内容 |
+| `shell` | `src/tools/implementations/winshell/dist/winshell.exe` | 执行 PowerShell 命令（别名解析、引号感知操作符转换、复杂脚本使用 .ps1，超时单位为秒） |
+| `grep` | `src/tools/implementations/grep/dist/grep.exe` | 搜索文件内容（正则，输出模式，上下文，类型过滤，分页） |
+| `glob` | `src/tools/implementations/glob/dist/glob.exe` | 按模式查找文件（最多 50 条） |
+| `edit` | `src/tools/implementations/edit/dist/edit.exe` | 精确字符串替换（引号规范化，replace_all 支持） |
 | `memory` | 内置工具 | 跨会话持久化记忆（save/load/list/search，支持全局/项目作用域） |
 
 `tools.json` 示例：
@@ -314,7 +326,7 @@ AGImyCLI/
       "function": {
         "name": "read_file",
         "description": "读取文件内容，支持多种格式",
-        "command": "external_tools/read_file/dist/read_file.exe",
+        "command": "src/tools/implementations/read_file/dist/read_file.exe",
         "parameters": {
           "type": "object",
           "properties": {
@@ -331,7 +343,7 @@ AGImyCLI/
       "function": {
         "name": "shell",
         "description": "执行 PowerShell 命令（别名解析）。复杂脚本自动使用 .ps1 文件执行。",
-        "command": "external_tools/winshell/dist/winshell.exe",
+        "command": "src/tools/implementations/winshell/dist/winshell.exe",
         "parameters": {
           "type": "object",
           "properties": {
@@ -411,9 +423,9 @@ Token 计算规则（结果取整）：
 
 ### 创建技能
 
-1. 在项目根目录的 `skills/` 下创建目录：
+1. 在 `src/skills/definitions/` 下创建目录：
 ```
-skills/
+src/skills/definitions/
   my-skill/
     SKILL.md
 ```
@@ -492,7 +504,7 @@ context: inline
 
 ### 示例：代码审查技能
 
-参见 `skills/code-review/SKILL.md`，这是一个完整的示例，使用 git diff 审查代码变更并提供反馈。
+参见 `src/skills/definitions/code-review/SKILL.md`，这是一个完整的示例，使用 git diff 审查代码变更并提供反馈。
 
 ## 自主工作流程
 

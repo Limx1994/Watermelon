@@ -73,91 +73,101 @@ python -m src
 ```
 AGImyCLI/
 ├── src/
-│   ├── main.py              # Entry point
-│   ├── tui.py               # TUI interface
-│   ├── agent.py             # Core agent loop
-│   ├── config.py            # Configuration management
-│   ├── memory.py            # Memory and conversation history
-│   ├── persistent_memory.py # Cross-session persistent memory engine
+│   ├── __init__.py            # Package init
+│   ├── __main__.py            # Entry: python -m src
+│   ├── core/
+│   │   ├── agent.py           # Core agent loop
+│   │   ├── config.py          # Configuration management
+│   │   ├── main.py            # Main entry point
+│   │   └── tui.py             # TUI interface
 │   ├── llm/
-│   │   └── client.py        # LLM client (DeepSeek API compatible, interruptible sleep)
+│   │   └── client.py          # LLM client (DeepSeek API compatible, interruptible sleep)
 │   ├── tools/
-│   │   ├── base.py          # Tool base class and ToolResult
-│   │   ├── registry.py      # Tool registry (singleton)
-│   │   ├── loader.py        # External tool loader
-│   │   ├── external.py      # External CLI tool executor
-│   │   ├── sleep.py         # Sleep tool for autonomous idle waiting
-│   │   └── memory_tool.py   # Persistent memory tool (LLM-invokable)
+│   │   ├── base.py            # Tool base class and ToolResult
+│   │   ├── registry.py        # Tool registry (singleton)
+│   │   ├── loader.py          # External tool loader
+│   │   ├── external.py        # External CLI tool executor
+│   │   ├── sleep.py           # Sleep tool for autonomous idle waiting
+│   │   ├── memory_tool.py     # Persistent memory tool (LLM-invokable)
+│   │   └── implementations/   # Compiled .exe tools
+│   │       ├── read_file/     # File reading tool
+│   │       ├── write_file/    # File writing tool
+│   │       ├── winshell/      # Shell executor with alias resolution
+│   │       ├── grep/          # Content search tool
+│   │       ├── glob/          # File pattern matching tool
+│   │       └── edit/          # String replacement tool
 │   ├── commands/
-│   │   ├── __init__.py      # Package init
-│   │   ├── registry.py      # Slash command registry (CommandRegistry, SlashCommand)
-│   │   ├── core.py          # Built-in slash commands (/help, /model, /save, etc.)
-│   │   └── completer.py     # Slash command tab completion (SlashCommandCompleter)
+│   │   ├── __init__.py        # Package init
+│   │   ├── registry.py        # Slash command registry (CommandRegistry, SlashCommand)
+│   │   ├── core.py            # Built-in slash commands (/help, /model, /save, etc.)
+│   │   └── completer.py       # Slash command tab completion (SlashCommandCompleter)
 │   ├── cron/
-│   │   └── scheduler.py     # Cron scheduler (CronScheduler, CronTask)
+│   │   └── scheduler.py       # Cron scheduler (CronScheduler, CronTask)
 │   ├── mcp/
-│   │   ├── base.py          # Abstract MCP client base class
-│   │   ├── protocol.py      # JSON-RPC 2.0 protocol
-│   │   ├── client.py        # MCP client factory (create_mcp_client)
-│   │   ├── manager.py       # MCP client manager
-│   │   ├── index.py         # Tool name to client index
-│   │   ├── persistence.py   # MCP data persistence
-│   │   ├── stdio_client.py  # Stdio-based MCP client
-│   │   └── http_client.py   # HTTP-based MCP client
+│   │   ├── base.py            # Abstract MCP client base class
+│   │   ├── protocol.py        # JSON-RPC 2.0 protocol
+│   │   ├── client.py          # MCP client factory (create_mcp_client)
+│   │   ├── manager.py         # MCP client manager
+│   │   ├── index.py           # Tool name to client index
+│   │   ├── persistence.py     # MCP data persistence
+│   │   ├── stdio_client.py    # Stdio-based MCP client
+│   │   └── http_client.py     # HTTP-based MCP client
 │   ├── skills/
-│   │   ├── __init__.py      # Skill system init (init_skills)
-│   │   ├── definition.py    # SkillDefinition dataclass
-│   │   ├── loader.py        # SKILL.md parser and loader
-│   │   ├── registry.py      # SkillRegistry singleton
-│   │   ├── commands.py      # Skill execution handler + /skills command
-│   │   └── tool.py          # SkillTool (LLM-invokable skill tool)
+│   │   ├── __init__.py        # Skill system init (init_skills)
+│   │   ├── definition.py      # SkillDefinition dataclass
+│   │   ├── loader.py          # SKILL.md parser and loader
+│   │   ├── registry.py        # SkillRegistry singleton
+│   │   ├── commands.py        # Skill execution handler + /skills command
+│   │   ├── tool.py            # SkillTool (LLM-invokable skill tool)
+│   │   └── definitions/       # SKILL.md files
+│   │       └── code-review/   # Example: code review skill
+│   │           └── SKILL.md
+│   ├── memory/
+│   │   ├── memory.py          # Memory and conversation history
+│   │   └── persistent_memory.py # Cross-session persistent memory engine
+│   ├── prompts/
+│   │   ├── system/            # System prompt sections
+│   │   │   ├── intro.md
+│   │   │   ├── system_rules.md
+│   │   │   ├── doing_tasks.md
+│   │   │   ├── tool_usage.md
+│   │   │   ├── tone_style.md
+│   │   │   └── output_efficiency.md
+│   │   ├── service/           # Service prompts
+│   │   │   ├── compact_resume.md
+│   │   │   ├── summary_system.md
+│   │   │   └── summary_template.md
+│   │   ├── recovery/          # Recovery prompts
+│   │   │   ├── max_tokens_recovery.md
+│   │   │   ├── context_too_long.md
+│   │   │   └── token_budget_nudge.md
+│   │   └── autonomous/
+│   │       └── instructions.md # Autonomous mode behavior
 │   └── utils/
-│       ├── path.py          # Path utilities
-│       ├── token_counter.py  # Token counting
-│       └── logging.py       # Logging utilities
-├── external_tools/           # External compiled .exe tools
-│   ├── read_file/           # File reading tool
-│   ├── write_file/          # File writing tool
-│   ├── winshell/            # Shell executor with alias resolution
-│   ├── grep/                # Content search tool
-│   ├── glob/                 # File pattern matching tool
-│   └── edit/                 # String replacement tool
-├── skills/                   # Skill definitions (SKILL.md files)
-│   └── code-review/         # Example: code review skill
+│       ├── path.py            # Path utilities
+│       ├── token_counter.py   # Token counting
+│       ├── logging.py         # Logging utilities
+│       └── tool_result_persistence.py # Tool result persistence
+├── data/                      # Runtime data (gitignored)
+│   ├── logs/                  # Log files
+│   ├── memory/                # Session history and persistent memory files
+│   │   └── tool_results/      # Cached tool results
+│   └── mcpdata/               # MCP persistence data
+├── skills/                    # Skill definitions (SKILL.md files)
+│   └── code-review/           # Example: code review skill
 │       └── SKILL.md
-├── prompts/                 # Prompt templates
-│   ├── system/              # System prompt sections
-│   │   ├── intro.md
-│   │   ├── system_rules.md
-│   │   ├── doing_tasks.md
-│   │   ├── tool_usage.md
-│   │   ├── tone_style.md
-│   │   └── output_efficiency.md
-│   ├── service/             # Service prompts
-│   │   ├── compact_resume.md
-│   │   ├── summary_system.md
-│   │   └── summary_template.md
-│   ├── recovery/            # Recovery prompts
-│   │   ├── max_tokens_recovery.md
-│   │   ├── context_too_long.md
-│   │   └── token_budget_nudge.md
-│   └── autonomous/
-│       └── instructions.md  # Autonomous mode behavior
-├── memory/                  # Conversation and persistent memory storage
-│   ├── *.md                 # Persistent memory files (YAML frontmatter)
-│   ├── MEMORY.md            # Persistent memory index (auto-generated)
-│   └── history/             # Archived session history
-├── mcpdata/                 # MCP persistence data
-├── logs/                    # Log files
-├── config/                  # Configuration files
-│   ├── mcp.json                 # MCP server configuration
-│   ├── tools.json               # Tool definitions
-│   └── scheduled_tasks.json     # Cron task state (auto-generated)
-├── config.json              # Application configuration
-├── requirements.txt         # Python dependencies
-├── README.md                # This file
-├── README_zh.md            # Readme (Chinese)
-└── LICENSE                  # License file
+├── config/                    # Configuration files
+│   ├── config.json            # Application configuration (gitignored)
+│   ├── config.json.example    # Configuration template
+│   ├── mcp.json               # MCP server configuration (gitignored)
+│   ├── mcp.json.example       # MCP config template
+│   ├── tools.json             # Tool definitions
+│   └── scheduled_tasks.json   # Cron task state (auto-generated)
+├── config.json.example        # Configuration template (root copy)
+├── requirements.txt           # Python dependencies
+├── README.md                  # This file
+├── README_zh.md               # Readme (Chinese)
+└── LICENSE                    # License file
 ```
 
 ## Configuration
@@ -200,6 +210,8 @@ AGImyCLI/
 | | `system_tool_usage` | Path to tool usage rules | `./prompts/system/tool_usage.md` |
 | | `system_tone_style` | Path to tone/style guidelines | `./prompts/system/tone_style.md` |
 | | `system_output_efficiency` | Path to output efficiency rules | `./prompts/system/output_efficiency.md` |
+
+Note: Prompt files have been moved to `src/prompts/`. Update the above paths in `config/config.json` to `./src/prompts/...` if needed.
 
 ### compact — Context Compression Settings
 
@@ -268,7 +280,7 @@ Service and recovery prompts:
 | `summary_system` | System prompt for summary generation |
 | `summary_template` | Template for summary generation (supports `{messages}` placeholder) |
 
-All prompts are customizable by editing the `.md` files in the `prompts/` directory. If a path is empty or the file is missing, a built-in default string is used.
+All prompts are customizable by editing the `.md` files in the `src/prompts/` directory. If a path is empty or the file is missing, a built-in default string is used.
 
 ### config/mcp.json — MCP Server Configuration
 
@@ -298,12 +310,12 @@ External tools are compiled .exe programs defined in `tools.json` and communicat
 
 | Tool | Command | Description |
 |------|---------|-------------|
-| `read_file` | `external_tools/read_file/dist/read_file.exe` | Read file contents (text/image/PDF/notebook, offset/limit/papers support) |
-| `write_file` | `external_tools/write_file/dist/write_file.exe` | Write file contents |
-| `shell` | `external_tools/winshell/dist/winshell.exe` | Execute PowerShell commands (alias resolution, quote-aware operator conversion, .ps1 for complex scripts, timeout in seconds) |
-| `grep` | `external_tools/grep/dist/grep.exe` | Search file contents (regex, output modes, context, type filter, pagination) |
-| `glob` | `external_tools/glob/dist/glob.exe` | Find files by pattern (max 50 results) |
-| `edit` | `external_tools/edit/dist/edit.exe` | Precise string replacement (quote normalization, replace_all support) |
+| `read_file` | `src/tools/implementations/read_file/dist/read_file.exe` | Read file contents (text/image/PDF/notebook, offset/limit/papers support) |
+| `write_file` | `src/tools/implementations/write_file/dist/write_file.exe` | Write file contents |
+| `shell` | `src/tools/implementations/winshell/dist/winshell.exe` | Execute PowerShell commands (alias resolution, quote-aware operator conversion, .ps1 for complex scripts, timeout in seconds) |
+| `grep` | `src/tools/implementations/grep/dist/grep.exe` | Search file contents (regex, output modes, context, type filter, pagination) |
+| `glob` | `src/tools/implementations/glob/dist/glob.exe` | Find files by pattern (max 50 results) |
+| `edit` | `src/tools/implementations/edit/dist/edit.exe` | Precise string replacement (quote normalization, replace_all support) |
 | `memory` | Built-in | Cross-session persistent memory (save/load/list/search with global/project scopes) |
 
 Example in `tools.json`:
@@ -314,7 +326,7 @@ Example in `tools.json`:
       "function": {
         "name": "read_file",
         "description": "Read file contents with multi-format support",
-        "command": "external_tools/read_file/dist/read_file.exe",
+        "command": "src/tools/implementations/read_file/dist/read_file.exe",
         "parameters": {
           "type": "object",
           "properties": {
@@ -331,7 +343,7 @@ Example in `tools.json`:
       "function": {
         "name": "shell",
         "description": "Execute PowerShell commands with alias resolution. Complex scripts are automatically executed via .ps1 files.",
-        "command": "external_tools/winshell/dist/winshell.exe",
+        "command": "src/tools/implementations/winshell/dist/winshell.exe",
         "parameters": {
           "type": "object",
           "properties": {
@@ -411,9 +423,9 @@ Skills are extensible prompt injection mechanisms. Each skill is a Markdown file
 
 ### Creating a Skill
 
-1. Create a directory under `skills/` (project root):
+1. Create a directory under `src/skills/definitions/`:
 ```
-skills/
+src/skills/definitions/
   my-skill/
     SKILL.md
 ```
@@ -492,7 +504,7 @@ When a skill specifies `allowed-tools`, only those tools are available during sk
 
 ### Example: Code Review Skill
 
-See `skills/code-review/SKILL.md` for a complete example that reviews code changes using git diff and provides feedback.
+See `src/skills/definitions/code-review/SKILL.md` for a complete example that reviews code changes using git diff and provides feedback.
 
 ## Autonomous Workflow
 
