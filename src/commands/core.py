@@ -10,7 +10,7 @@ from .utils import output as _output
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from ..tui import SimpleTUI
+    from ..core.tui import SimpleTUI
 
 # 角色映射常量
 _ROLE_MAP = {"user": "用户", "assistant": "助手", "system": "系统", "tool": "工具"}
@@ -41,7 +41,7 @@ def cmd_help(tui: "SimpleTUI", args: str) -> None:
 # ── /clear ─────────────────────────────────────────────────
 
 def cmd_clear(tui: "SimpleTUI", args: str) -> None:
-    from ..memory import memory
+    from ..memory.memory import memory
     with tui._fragments_lock:
         tui._fragments.clear()
     tui._auto_scroll = True
@@ -53,7 +53,7 @@ def cmd_clear(tui: "SimpleTUI", args: str) -> None:
 # ── /model ─────────────────────────────────────────────────
 
 def cmd_model(tui: "SimpleTUI", args: str) -> None:
-    from ..config import config
+    from ..core.config import config
     if not args.strip():
         _output(tui, f"\n当前模型: {config.model}\n")
         return
@@ -72,7 +72,7 @@ def cmd_model(tui: "SimpleTUI", args: str) -> None:
 # ── /config ────────────────────────────────────────────────
 
 def cmd_config(tui: "SimpleTUI", args: str) -> None:
-    from ..config import config
+    from ..core.config import config
     logger.debug("Command: /config")
     # 隐藏敏感信息
     display_config = config.to_dict()
@@ -90,7 +90,7 @@ def cmd_config(tui: "SimpleTUI", args: str) -> None:
 # ── /history ───────────────────────────────────────────────
 
 def cmd_history(tui: "SimpleTUI", args: str) -> None:
-    from ..memory import memory
+    from ..memory.memory import memory
     logger.debug("Command: /history")
     messages = memory.get_messages()
     if not messages:
@@ -112,7 +112,7 @@ def cmd_history(tui: "SimpleTUI", args: str) -> None:
 # ── /save ──────────────────────────────────────────────────
 
 def cmd_save(tui: "SimpleTUI", args: str) -> None:
-    from ..memory import memory
+    from ..memory.memory import memory
     logger.info("Session save requested")
     path = memory.save_current_session()
     if path:
@@ -124,7 +124,7 @@ def cmd_save(tui: "SimpleTUI", args: str) -> None:
 # ── /load ──────────────────────────────────────────────────
 
 def cmd_load(tui: "SimpleTUI", args: str) -> None:
-    from ..memory import memory
+    from ..memory.memory import memory
     logger.debug(f"Command: /load {args.strip()}")
     sessions = memory.list_sessions()
     if not sessions:
@@ -182,7 +182,7 @@ def cmd_load(tui: "SimpleTUI", args: str) -> None:
 # ── /memory ────────────────────────────────────────────────
 
 def cmd_memory(tui: "SimpleTUI", args: str) -> None:
-    from ..memory import memory
+    from ..memory.memory import memory
     logger.debug(f"Command: /memory {args.strip()}")
     count = 20
     if args.strip():
@@ -209,7 +209,7 @@ def cmd_memory(tui: "SimpleTUI", args: str) -> None:
         lines.append(f"  [{role}] {preview}\n")
     # 持久化记忆提示
     try:
-        from ..persistent_memory import persistent_memory
+        from ..memory.persistent_memory import persistent_memory
         pm_count = persistent_memory.count()
         if pm_count > 0:
             lines.append(f"\n  提示: 还有 {pm_count} 条持久化记忆，用 /remember 查看\n")
@@ -230,7 +230,7 @@ def cmd_compact(tui: "SimpleTUI", args: str) -> None:
 
     def _run():
         try:
-            from ..memory import CompactEngine
+            from ..memory.memory import CompactEngine
             # 获取 _run_lock 防止与 agent._run_inner() 并发修改 history
             with tui.agent._run_lock:
                 result = tui.agent._compact_engine.compact(
@@ -256,7 +256,7 @@ def cmd_compact(tui: "SimpleTUI", args: str) -> None:
 # ── /mcp ───────────────────────────────────────────────────
 
 def cmd_mcp(tui: "SimpleTUI", args: str) -> None:
-    from ..config import config
+    from ..core.config import config
     servers = config.mcp_servers
     if not servers:
         _output(tui, "\n未配置 MCP 服务器\n")
@@ -284,7 +284,7 @@ def cmd_mcp(tui: "SimpleTUI", args: str) -> None:
 # ── /tools ─────────────────────────────────────────────────
 
 def cmd_tools(tui: "SimpleTUI", args: str) -> None:
-    from ..config import config
+    from ..core.config import config
     from ..tools.registry import registry
     enabled = config.enabled_tools
     all_tools = registry.list_tools()
@@ -314,7 +314,7 @@ def cmd_tools(tui: "SimpleTUI", args: str) -> None:
 # ── /system ────────────────────────────────────────────────
 
 def cmd_system(tui: "SimpleTUI", args: str) -> None:
-    from ..config import config
+    from ..core.config import config
     prompt = config.get_system_prompt()
     max_len = 2000
     if len(prompt) > max_len:
@@ -325,7 +325,7 @@ def cmd_system(tui: "SimpleTUI", args: str) -> None:
 # ── /version ───────────────────────────────────────────────
 
 def cmd_version(tui: "SimpleTUI", args: str) -> None:
-    from ..config import config
+    from ..core.config import config
     lines = [
         "\n┌─────────────────────────────────────────────┐",
         "│  AGImyCLI - TUI AGI Interaction Tool         │",
@@ -355,7 +355,7 @@ def cmd_exit(tui: "SimpleTUI", args: str) -> None:
 # ── /remember ──────────────────────────────────────────────
 
 def cmd_remember(tui: "SimpleTUI", args: str) -> None:
-    from ..persistent_memory import persistent_memory
+    from ..memory.persistent_memory import persistent_memory
     arg = args.strip()
     logger.info(f"Command: /remember {arg}")
 
@@ -401,7 +401,7 @@ def cmd_remember(tui: "SimpleTUI", args: str) -> None:
 # ── /forget ────────────────────────────────────────────────
 
 def cmd_forget(tui: "SimpleTUI", args: str) -> None:
-    from ..persistent_memory import persistent_memory
+    from ..memory.persistent_memory import persistent_memory
     name = args.strip()
     if not name:
         _output(tui, "\n用法: /forget <记忆名称>\n", "class:error")
