@@ -16,7 +16,7 @@ def init_skills() -> None:
     Skills are loaded from SKILL.md files in subdirectories of each
     configured skill directory (default: skills/ relative to project root).
     """
-    from ..config import config
+    from ..core.config import config
     from ..commands.registry import command_registry
 
     if not config.skills_enabled:
