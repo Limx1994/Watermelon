@@ -46,19 +46,19 @@
     "backup_count": 5
   },
   "prompts": {
-    "system_intro": "./prompts/system/intro.md",
-    "system_rules": "./prompts/system/system_rules.md",
-    "system_doing_tasks": "./prompts/system/doing_tasks.md",
-    "system_tool_usage": "./prompts/system/tool_usage.md",
-    "system_tone_style": "./prompts/system/tone_style.md",
-    "system_output_efficiency": "./prompts/system/output_efficiency.md",
-    "autonomous_instructions": "./prompts/autonomous/instructions.md",
-    "compact_resume": "./prompts/service/compact_resume.md",
-    "summary_system": "./prompts/service/summary_system.md",
-    "summary_template": "./prompts/service/summary_template.md",
-    "max_tokens_recovery": "./prompts/recovery/max_tokens_recovery.md",
-    "context_too_long": "./prompts/recovery/context_too_long.md",
-    "token_budget_nudge": "./prompts/recovery/token_budget_nudge.md"
+    "system_intro": "./src/prompts/system/intro.md",
+    "system_rules": "./src/prompts/system/system_rules.md",
+    "system_doing_tasks": "./src/prompts/system/doing_tasks.md",
+    "system_tool_usage": "./src/prompts/system/tool_usage.md",
+    "system_tone_style": "./src/prompts/system/tone_style.md",
+    "system_output_efficiency": "./src/prompts/system/output_efficiency.md",
+    "autonomous_instructions": "./src/prompts/autonomous/instructions.md",
+    "compact_resume": "./src/prompts/service/compact_resume.md",
+    "summary_system": "./src/prompts/service/summary_system.md",
+    "summary_template": "./src/prompts/service/summary_template.md",
+    "max_tokens_recovery": "./src/prompts/recovery/max_tokens_recovery.md",
+    "context_too_long": "./src/prompts/recovery/context_too_long.md",
+    "token_budget_nudge": "./src/prompts/recovery/token_budget_nudge.md"
   },
   "autonomous": {
     "tick_interval_minutes": 10,

@@ -44,7 +44,7 @@ class Memory:
         """Initialize memory - starts fresh, no historical loading"""
         self._history: List[Dict[str, Any]] = []
         self._session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self._history_dir = get_project_root() / "memory" / "history"
+        self._history_dir = get_project_root() / "data" / "memory" / "history"
         self._rw_lock = threading.RLock()
         logger.debug(f"Memory initialized: session_id={self._session_id}")
 

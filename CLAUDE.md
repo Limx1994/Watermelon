@@ -130,7 +130,7 @@ All settings in `config.json`:
 | | `context_too_long` | `./prompts/recovery/context_too_long.md` | Context overflow recovery |
 | | `token_budget_nudge` | `./prompts/recovery/token_budget_nudge.md` | Token budget warning |
 
-Note: Prompt files have been moved to `src/prompts/`. Update the above paths in `config/config.json` to `./src/prompts/...` if needed.
+Note: Prompt files have been moved to `src/prompts/`. All paths in `config/config.json` must use `./src/prompts/...` format (as shown in `config.json.example`).
 
 MCP config in `config/mcp.json`: `{"mcpServers": {"name": {"type": "stdio|http", "command": "...", "args": []}}}`
 

@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class MCPDataStore:
     """Handles persistence of MCP server data in mcpdata/ directory"""
 
-    def __init__(self, mcpdata_dir: str = "mcpdata"):
+    def __init__(self, mcpdata_dir: str = "data/mcpdata"):
         self.mcpdata_path = get_project_root() / mcpdata_dir
         ensure_directory(str(self.mcpdata_path))
         self._errors_log = self.mcpdata_path / "errors.log"

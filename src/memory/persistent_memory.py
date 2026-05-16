@@ -99,7 +99,7 @@ class PersistentMemory:
         if self._initialized:
             return
         from src.core.config import config
-        self._project_dir = get_project_root() / "memory"
+        self._project_dir = get_project_root() / "data" / "memory"
         global_dir_str = config.persistent_memory_global_dir
         if global_dir_str:
             self._global_dir = Path(global_dir_str).expanduser().resolve()

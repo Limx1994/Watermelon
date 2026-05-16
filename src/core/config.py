@@ -340,7 +340,7 @@ class Config:
     # Logs Configuration
     @property
     def logs_path(self) -> str:
-        return self._config.get("logs", {}).get("path", "./logs/agent.log")
+        return self._config.get("logs", {}).get("path", "./data/logs/agent.log")
 
     @property
     def logs_level(self) -> str:

@@ -20,8 +20,8 @@ def main():
     # Ensure required directories exist
     from src.utils.path import ensure_directory
     try:
-        ensure_directory("./memory")
-        ensure_directory("./logs")
+        ensure_directory("./data/memory")
+        ensure_directory("./data/logs")
     except Exception as e:
         logger.warning(f"Failed to create directories: {e}")
 

@@ -1,5 +1,5 @@
 """Allow running as: python -m src"""
 
-from .main import main
+from .core.main import main
 
 main()

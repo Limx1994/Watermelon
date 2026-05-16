@@ -63,8 +63,6 @@ pip install -r requirements.txt
 
 3. Run:
 ```bash
-python -m src.main
-# or
 python -m src
 ```
 
