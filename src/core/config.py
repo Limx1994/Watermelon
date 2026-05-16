@@ -51,7 +51,7 @@ class Config:
 
     def _load_config(self) -> None:
         """Load configuration from config.json"""
-        config_path = resolve_path("config.json")
+        config_path = resolve_path("config/config.json")
         try:
             with open(config_path, "r", encoding="utf-8") as f:
                 self._config = json.load(f)
@@ -467,7 +467,7 @@ class Config:
     @property
     def skill_dirs(self) -> list:
         """Directories to scan for SKILL.md files (relative to project root)"""
-        return self._config.get("skills", {}).get("dirs", ["skills"])
+        return self._config.get("skills", {}).get("dirs", ["src/skills/definitions"])
 
     def set_model(self, model_name: str) -> None:
         """Set model name in config (thread-safe)"""
