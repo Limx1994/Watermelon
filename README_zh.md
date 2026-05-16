@@ -153,12 +153,8 @@ AGImyCLI/
 │   ├── memory/                # 会话历史和持久化记忆文件
 │   │   └── tool_results/      # 缓存的工具结果
 │   └── mcpdata/               # MCP 持久化数据
-├── skills/                    # 技能定义（SKILL.md 文件）
-│   └── code-review/           # 示例：代码审查技能
-│       └── SKILL.md
 ├── config/                    # 配置文件
 │   ├── config.json            # 应用配置（已 gitignore）
-│   ├── config.json.example    # 配置模板
 │   ├── mcp.json               # MCP 服务器配置（已 gitignore）
 │   ├── mcp.json.example       # MCP 配置模板
 │   ├── tools.json             # 工具定义

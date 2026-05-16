@@ -66,7 +66,6 @@ config/                    # Configuration files
 ├── mcp.json               # MCP server configuration (gitignored, use mcp.json.example)
 ├── tools.json             # Tool definitions
 └── scheduled_tasks.json   # Cron task state (auto-generated)
-skills/                    # SKILL.md definitions (project root)
 config.json.example        # Configuration template
 requirements.txt           # Python dependencies
 ```

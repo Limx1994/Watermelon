@@ -153,12 +153,8 @@ AGImyCLI/
 │   ├── memory/                # Session history and persistent memory files
 │   │   └── tool_results/      # Cached tool results
 │   └── mcpdata/               # MCP persistence data
-├── skills/                    # Skill definitions (SKILL.md files)
-│   └── code-review/           # Example: code review skill
-│       └── SKILL.md
 ├── config/                    # Configuration files
 │   ├── config.json            # Application configuration (gitignored)
-│   ├── config.json.example    # Configuration template
 │   ├── mcp.json               # MCP server configuration (gitignored)
 │   ├── mcp.json.example       # MCP config template
 │   ├── tools.json             # Tool definitions
