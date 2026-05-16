@@ -7,7 +7,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from openai import OpenAI
 
-from ..config import config
+from ..core.config import config
 
 logger = logging.getLogger(__name__)
 

@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
 
-from ..config import config
+from ..core.config import config
 
 
 DEFAULT_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s:%(lineno)d | %(message)s"
