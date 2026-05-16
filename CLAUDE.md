@@ -134,7 +134,7 @@ JSON-RPC 2.0: `initialize`, `tools/list`, `tools/call`. Key classes: `MCPManager
 
 Two independent subsystems sharing `memory/` directory:
 
-**Session Memory** (`Memory` singleton): In-RAM conversation history with session save/load to `memory/history/`. Key methods: `load_session_by_index(idx)` for encapsulated session loading. `CompactEngine` three-layer compression:
+**Session Memory** (`Memory` singleton): In-RAM conversation history with session save/load to `memory/history/`. `CompactEngine` three-layer compression:
 - **Level 1 (Micro)**: Clear old tool results (streak ≥ 3 or gap ≥ 5min)
 - **Level 2 (Auto)**: LLM summary (usage ≥ 85%)
 - **Level 3 (Full)**: Save session & reset (usage ≥ 95%)

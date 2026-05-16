@@ -151,20 +151,6 @@ class Memory:
             self._history.append(message)
         logger.debug(f"Added {role} message, session has {len(self._history)} messages")
 
-    def load_session_by_index(self, idx: int) -> bool:
-        """Load a session by its index in list_sessions() result.
-
-        Args:
-            idx: 0-based index from list_sessions()
-        Returns:
-            True if loaded successfully
-        """
-        sessions = self.list_sessions()
-        if 0 <= idx < len(sessions):
-            filepath = self._history_dir / sessions[idx]["filename"]
-            return self.load_session(str(filepath))
-        return False
-
     def get_messages(self) -> List[Dict[str, Any]]:
         """Get current session conversation history (deep copy to prevent mutation)"""
         with self._rw_lock:

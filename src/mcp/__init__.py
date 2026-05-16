@@ -1,1 +1,1 @@
-"""MCP protocol module"""
+"""MCP client module"""

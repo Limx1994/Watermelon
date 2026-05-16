@@ -30,11 +30,6 @@ class ToolResult:
             "metadata": self.metadata
         }
 
-    def __str__(self) -> str:
-        if self.success:
-            return self.content
-        return f"Error: {self.error}\n{self.content}"
-
 
 class BaseTool(ABC):
     """Abstract base class for all tools"""

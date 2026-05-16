@@ -57,9 +57,3 @@ class ToolIndex:
         """Get all registered tool definitions"""
         with self._lock:
             return [entry[2] for entry in self._index.values()]
-
-    def clear(self) -> None:
-        """Clear all registrations"""
-        with self._lock:
-            self._index.clear()
-            self._servers.clear()

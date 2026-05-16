@@ -1,6 +1,6 @@
 """斜杠命令系统"""
 
-from .registry import CommandRegistry, SlashCommand, command_registry
+from .registry import command_registry
 from .completer import SlashCommandCompleter
 from .core import register_core_commands
 

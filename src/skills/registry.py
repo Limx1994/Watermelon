@@ -40,10 +40,6 @@ class SkillRegistry:
         """Return True if any skills are registered."""
         return len(self._skills) > 0
 
-    def clear(self) -> None:
-        """Remove all registered skills."""
-        self._skills.clear()
-        logger.debug("Skill registry cleared")
 
 
 skill_registry = SkillRegistry()
