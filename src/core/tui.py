@@ -246,7 +246,7 @@ class SimpleTUI:
         self._compact_indicator: str = ""  # 压缩状态指示器
 
         # Input buffer - handles user input with history
-        from .commands import command_registry, SlashCommandCompleter, init_commands
+        from src.commands import command_registry, SlashCommandCompleter, init_commands
         init_commands()
         self._slash_completer = SlashCommandCompleter(command_registry)
         self._dummy_completer = DummyCompleter()
@@ -914,7 +914,7 @@ class SimpleTUI:
     def _execute_slash_command(self, cmd_text: str) -> None:
         """解析并执行斜杠命令。主线程同步执行。"""
         logger.info(f"Slash command: {cmd_text}")
-        from .commands import command_registry
+        from src.commands import command_registry
 
         parts = cmd_text.split(None, 1)
         cmd_name = parts[0].lstrip('/')  # 去掉前导 /（支持 "/ command" 写法）
@@ -1100,7 +1100,7 @@ class SimpleTUI:
         self._print_welcome()
         self._rebuild_buffer()
 
-        from .cron.scheduler import CronScheduler
+        from src.cron.scheduler import CronScheduler
         self._cron_scheduler = CronScheduler(
             self.agent, config.cron_tasks,
             tick_interval_minutes=config.tick_interval_minutes

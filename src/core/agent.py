@@ -18,7 +18,7 @@ MAX_CONCURRENT_TOOLS = 10
 TRUNCATE_CONTENT_LENGTH = 20000
 
 from .config import config
-from .llm.client import (
+from src.llm.client import (
     LLMClient,
     InterruptedError,
     create_system_message,
@@ -27,12 +27,12 @@ from .llm.client import (
     create_tool_result_message,
     is_network_error,
 )
-from .tools.registry import registry
-from .tools.loader import load_external_tools
-from .mcp.manager import MCPManager
-from .memory import memory, CompactEngine
-from .utils.token_counter import count_tokens
-from .utils.tool_result_persistence import ToolResultPersistence
+from src.tools.registry import registry
+from src.tools.loader import load_external_tools
+from src.mcp.manager import MCPManager
+from src.memory.memory import memory, CompactEngine
+from src.utils.token_counter import count_tokens
+from src.utils.tool_result_persistence import ToolResultPersistence
 
 
 class AgentCancelledError(Exception):
@@ -221,7 +221,7 @@ class Agent:
         registry.clear()
         logger.debug("Tool registry cleared")
         load_external_tools()
-        from .tools.sleep import SleepTool
+        from src.tools.sleep import SleepTool
         sleep_tool = SleepTool(self._sleep_event, agent=self)
         registry.register(sleep_tool)
         # Register skill tool if skills are loaded
@@ -229,7 +229,7 @@ class Agent:
         # Register persistent memory tool
         if config.persistent_memory_enabled:
             try:
-                from .tools.memory_tool import MemoryTool
+                from src.tools.memory_tool import MemoryTool
                 registry.register(MemoryTool())
                 logger.debug("MemoryTool registered")
             except Exception as e:
@@ -241,8 +241,8 @@ class Agent:
     def _try_register_skill_tool(self) -> None:
         """Register SkillTool if skills are loaded but tool not yet registered."""
         try:
-            from .skills.tool import SkillTool
-            from .skills.registry import skill_registry
+            from src.skills.tool import SkillTool
+            from src.skills.registry import skill_registry
             if skill_registry.is_loaded() and registry.get("invoke_skill") is None:
                 registry.register(SkillTool())
                 logger.info("SkillTool registered (deferred)")
@@ -316,7 +316,7 @@ class Agent:
 
     def _build_project_context(self) -> str:
         """Build project context injection message (CLAUDE.md + date + gitStatus)."""
-        from .utils.path import resolve_path
+        from src.utils.path import resolve_path
         parts = ["<system-reminder>"]
         parts.append(f"Current date: {datetime.now().strftime('%Y-%m-%d')}")
 
@@ -335,7 +335,7 @@ class Agent:
         # Inject persistent memory index (global + project)
         if config.persistent_memory_enabled:
             try:
-                from .persistent_memory import persistent_memory
+                from src.memory.persistent_memory import persistent_memory
                 mem_idx = persistent_memory.load_index()
                 if mem_idx:
                     max_chars = config.persistent_memory_max_index_chars
@@ -365,7 +365,7 @@ class Agent:
 
         # Inject available skills listing
         try:
-            from .skills.registry import skill_registry
+            from src.skills.registry import skill_registry
             if skill_registry.is_loaded():
                 skill_lines = []
                 for s in skill_registry.list_skills():
@@ -418,7 +418,7 @@ class Agent:
         """
         if not config.tool_result_budget_max_chars:
             return 0
-        from .utils.token_counter import count_tokens
+        from src.utils.token_counter import count_tokens
         saved = 0
         for m in messages:
             if m.get("role") != "tool":

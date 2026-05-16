@@ -10,7 +10,7 @@ setup_logging()
 
 logger = logging.getLogger(__name__)
 
-from src.tui import run_tui
+from src.core.tui import run_tui
 
 
 def main():

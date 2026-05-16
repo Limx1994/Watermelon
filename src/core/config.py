@@ -6,7 +6,7 @@ import os
 import threading
 from typing import Any, Dict, List, Optional
 
-from .utils.path import resolve_path
+from src.utils.path import resolve_path
 
 logger = logging.getLogger(__name__)
 
