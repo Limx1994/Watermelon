@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .utils.path import get_project_root
+from src.utils.path import get_project_root
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +98,7 @@ class PersistentMemory:
     def _initialize(self) -> None:
         if self._initialized:
             return
-        from .config import config
+        from src.core.config import config
         self._project_dir = get_project_root() / "memory"
         global_dir_str = config.persistent_memory_global_dir
         if global_dir_str:
@@ -222,7 +222,7 @@ class PersistentMemory:
         if scope not in _VALID_SCOPES:
             logger.warning(f"Invalid scope: {scope}")
             return False
-        from .config import config
+        from src.core.config import config
         valid_types = set(config.persistent_memory_types)
         if mem_type not in valid_types:
             logger.warning(f"Invalid memory type: {mem_type}")

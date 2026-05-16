@@ -8,8 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .utils.path import get_project_root
-from .config import config
+from src.utils.path import get_project_root
+from src.core.config import config
 
 logger = logging.getLogger(__name__)
 
@@ -395,7 +395,7 @@ class CompactEngine:
 
         保留最近 5 个工具结果，将更早的结果替换为简短提示
         """
-        from .utils.token_counter import count_tokens
+        from src.utils.token_counter import count_tokens
 
         cleared = 0
         cleared_tokens = 0
@@ -435,7 +435,7 @@ class CompactEngine:
         2. 调用 LLM 生成摘要（锁外）
         3. 在锁内重建 history
         """
-        from .utils.token_counter import count_tokens
+        from src.utils.token_counter import count_tokens
 
         # 在锁内获取 history 快照，确保后续操作基于一致的数据
         with self._memory._rw_lock:
@@ -515,7 +515,7 @@ class CompactEngine:
         self._memory.save_current_session()
 
         # 在锁内获取 history 快照，确保后续操作基于一致的数据
-        from .utils.token_counter import count_tokens
+        from src.utils.token_counter import count_tokens
         with self._memory._rw_lock:
             history_snapshot = list(self._memory._history)
 
@@ -553,7 +553,7 @@ class CompactEngine:
 
     def _generate_summary(self, messages: List[Dict[str, Any]], boundary_idx: Optional[int], llm_client) -> str:
         """使用 LLM 生成对话摘要"""
-        from .llm.client import create_system_message, create_user_message
+        from src.llm.client import create_system_message, create_user_message
 
         # 收集要摘要的消息
         if boundary_idx is not None:
@@ -612,7 +612,7 @@ class CompactEngine:
         collapsed = 0
         collapsed_tokens = 0
 
-        from .utils.token_counter import count_tokens
+        from src.utils.token_counter import count_tokens
 
         with self._memory._rw_lock:
             history = self._memory._history
