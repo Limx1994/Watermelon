@@ -18,12 +18,13 @@ src/
 ├── agent.py             # Agent loop (concurrent tools, stop hooks)
 ├── config.py            # Config singleton
 ├── memory.py            # Memory + CompactEngine
+├── persistent_memory.py # PersistentMemory (cross-session file-based memory)
 ├── llm/client.py        # LLM client (streaming, model switching, interruptible sleep)
-├── tools/               # base.py, registry.py, loader.py, external.py, sleep.py
+├── tools/               # base.py, registry.py, loader.py, external.py, sleep.py, memory_tool.py
 ├── commands/            # registry.py, core.py, completer.py, utils.py
 ├── skills/              # definition.py, loader.py, registry.py, commands.py, tool.py
 ├── cron/scheduler.py    # CronScheduler
-├── mcp/                 # protocol.py, manager.py, index.py, persistence.py, clients
+├── mcp/                 # protocol.py, manager.py, base.py, client.py, http_client.py, stdio_client.py, index.py, persistence.py
 └── utils/               # path.py, token_counter.py, logging.py
 external_tools/          # Compiled .exe tools (read_file, write_file, shell, grep, glob, edit)
 skills/                  # SKILL.md definitions
@@ -49,7 +50,7 @@ All settings in `config.json`:
 | | `fallback_model` | `""` | Fallback: `{"model", "base_url", "api_key"}` |
 | | `temperature` / `top_p` | `0.7` | Sampling params |
 | | `reasoning_effort` | `max` | Reasoning depth |
-| | `context_window` | `128` | Max context (K tokens; code fallback: 64K) |
+| | `context_window` | `64` | Max context (K tokens) |
 | | `max_output_tokens` | `20000` | Max output tokens |
 | `agent` | `max_turns` | `50` | Max conversation turns |
 | | `max_retries` | `3` | Retry count |
@@ -72,6 +73,10 @@ All settings in `config.json`:
 | | `auto_compact_threshold` | `0.85` | Auto compact trigger ratio |
 | | `full_compact_threshold` | `0.95` | Full compact trigger ratio |
 | | `preserve_recent_messages` | `10` | Recent messages to preserve |
+| `persistent_memory` | `enabled` | `true` | Enable persistent memory system |
+| | `global_dir` | `""` | Global memory directory (empty = disabled) |
+| | `max_index_chars` | `4000` | Max chars injected from MEMORY.md into context |
+| | `types` | `["user","feedback","project","reference"]` | Allowed memory types |
 | `autonomous` | `tick_interval_minutes` | `10` | Proactive wake-up interval |
 | | `cron_tasks` | `[]` | Cron task definitions |
 | `prompts` | `system_intro` | `./prompts/system/intro.md` | System prompt intro section |
@@ -82,7 +87,6 @@ All settings in `config.json`:
 | | `system_output_efficiency` | `./prompts/system/output_efficiency.md` | Output efficiency rules |
 | | `autonomous_instructions` | `./prompts/autonomous/instructions.md` | Autonomous mode directives |
 | | `compact_resume` | `./prompts/service/compact_resume.md` | Post-compaction resume |
-| | `compact_prompt` | `./prompts/service/compact_prompt.md` | Compression summary prompt |
 | | `summary_system` | `./prompts/service/summary_system.md` | Summary system prompt |
 | | `summary_template` | `./prompts/service/summary_template.md` | Summary template |
 | | `max_tokens_recovery` | `./prompts/recovery/max_tokens_recovery.md` | Output truncation recovery |
@@ -104,8 +108,15 @@ MCP config in `config/mcp.json`: `{"mcpServers": {"name": {"type": "stdio|http",
 | `glob` | Pattern matching (max 50 results) |
 | `edit` | String replacement (exact match, replace_all, quote normalization) |
 | `sleep` | Built-in: pause autonomous operation |
+| `memory` | Built-in: save/load/list/search cross-session persistent memories |
 
-Key interfaces: `BaseTool` (ABC), `ToolResult` (success/content/error/metadata), `ExternalTool` (JSON stdin/stdout I/O, stderr overrides success). Tools defined in `config/tools.json`.
+Key interfaces: `BaseTool` (ABC), `ToolResult` (success/content/error/metadata), `ExternalTool` (JSON stdin/stdout I/O, stderr overrides success). Timeout parameter is in seconds. Tools defined in `config/tools.json`.
+
+### Config API
+
+`Config` singleton provides encapsulated access methods:
+- `set_model(model_name)`: Set model name (thread-safe)
+- `to_dict()`: Return deep copy of config dict (safe for display)
 
 ## MCP Protocol
 
@@ -113,7 +124,7 @@ JSON-RPC 2.0: `initialize`, `tools/list`, `tools/call`. Key classes: `MCPManager
 
 ## Agent Loop
 
-- **Project context**: Injects CLAUDE.md (first 3000 chars), date, `git status --short`
+- **Project context**: Injects CLAUDE.md (first 3000 chars), MEMORY.md index (persistent memories), date, `git status --short`
 - **Error tracking**: `MAX_CONSECUTIVE_ERRORS = 3`; context-too-long → full compact; model failure → fallback
 - **Concurrent execution**: Read-only tools parallel (`ThreadPoolExecutor`); write tools serial
 - **Stop hooks**: `register_stop_hook(callback)` — run after tool rounds
@@ -121,14 +132,18 @@ JSON-RPC 2.0: `initialize`, `tools/list`, `tools/call`. Key classes: `MCPManager
 
 ## Memory System
 
-`Memory` singleton (add/get/clear/session management). `CompactEngine` three-layer compression:
+Two independent subsystems sharing `memory/` directory:
+
+**Session Memory** (`Memory` singleton): In-RAM conversation history with session save/load to `memory/history/`. Key methods: `load_session_by_index(idx)` for encapsulated session loading. `CompactEngine` three-layer compression:
 - **Level 1 (Micro)**: Clear old tool results (streak ≥ 3 or gap ≥ 5min)
 - **Level 2 (Auto)**: LLM summary (usage ≥ 85%)
 - **Level 3 (Full)**: Save session & reset (usage ≥ 95%)
 
+**Persistent Memory** (`PersistentMemory` singleton): Cross-session file-based memory in `memory/*.md` with YAML frontmatter. Dual scope: global (`config.persistent_memory_global_dir`) + project (`memory/`). Four types: `user`, `feedback`, `project`, `reference`. MEMORY.md index auto-generated per scope. Injected into project context at conversation start. LLM-invokable via `memory` tool (save/load/list/search).
+
 ## Slash Commands
 
-`/help`, `/clear`, `/model [name]`, `/config`, `/history`, `/save`/`/load [id]`, `/memory [count]`, `/compact`, `/mcp`, `/tools`, `/system`, `/version`, `/skills`
+`/help`, `/clear`, `/model [name]`, `/config`, `/history`, `/save`/`/load [id]`, `/memory [count]`, `/remember [name]`, `/forget <name>`, `/compact`, `/mcp`, `/tools`, `/system`, `/version`, `/skills`, `/exit`
 
 ## Skill System
 
@@ -184,6 +199,11 @@ Shortcuts: `Enter` send, `Ctrl+J` newline, `Up/Down` history, `PageUp/PageDown` 
 11. **Network monitoring**: State-aware retry logic
 12. **Skill system**: SKILL.md + YAML frontmatter
 13. **Interruptible cancellation**: SIGINT handler + interruptible sleep for fast Ctrl+C response
+14. **Cross-session memory**: Persistent file-based memory with dual scope (global + project), MEMORY.md index injection, LLM-invokable memory tool
+15. **Encapsulated config**: Config class exposes `set_model()` and `to_dict()` methods; external code must not access `_config` directly
+16. **Integer token counting**: `count_tokens()` returns `int` (rounded) to avoid floating-point accumulation errors
+17. **Thread-safe MCP**: `ToolIndex` and `MCPManager` use locks for concurrent access safety
+18. **User-friendly errors**: Error messages shown to users never expose Python class names; details go to logs only
 
 ## Running
 

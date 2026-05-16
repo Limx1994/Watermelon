@@ -223,21 +223,8 @@ def read_pdf_file(file_path: Path, pages: Optional[str] = None) -> Dict[str, Any
             images = []
             for i in range(start_idx, end_idx + 1):
                 page = reader.pages[i]
-                # 将页面转换为图像
-                from io import BytesIO
-                from PIL import Image
-
-                # 渲染页面
-                media_box = page.mediabox
-                width = int(media_box.width)
-                height = int(media_box.height)
-
-                # 创建高分辨率图像
-                scale = 2
-                img = Image.new('RGB', (width * scale, height * scale))
-                # 注意: PyPDF2 不直接支持渲染，需要用其他方式
-
-                images.append({
+                # 提取文本（PyPDF2 不支持直接渲染为图像，回退到文本提取）
+images.append({
                     'pageNumber': i + 1,
                     'text': page.extract_text()[:1000] if page.extract_text() else ''
                 })

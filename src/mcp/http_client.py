@@ -179,7 +179,11 @@ class HttpMCPClient(BaseMCPClient):
                     logger.debug(f"MCP session established: {self._session_id}")
 
                 response.raise_for_status()
-                result = response.json()
+                try:
+                    result = response.json()
+                except json.JSONDecodeError as je:
+                    logger.error(f"HTTP MCP response not JSON: status={response.status_code}, body={response.text[:200]}")
+                    raise Exception(f"MCP server returned non-JSON response (HTTP {response.status_code})") from je
 
                 if "error" in result:
                     err = result["error"]

@@ -678,9 +678,8 @@ class SimpleTUI:
             if not self._input_history:
                 return
             if self._history_index <= 0:
-                self._history_index = len(self._input_history) - 1
-            else:
-                self._history_index -= 1
+                return  # 已在顶部，不再环绕
+            self._history_index -= 1
             self.input_buffer.text = self._input_history[self._history_index]
 
         @kb.add(Keys.Down)
@@ -905,8 +904,8 @@ class SimpleTUI:
         except AgentCancelledError:
             self._output_queue.put(("text", "\n[Agent cancelled]\n"))
         except Exception as e:
-            logger.error(f"Agent execution failed: {e}")
-            self._output_queue.put(("text", f"\nError: {e}\n"))
+            logger.error(f"Agent execution failed: {e}", exc_info=True)
+            self._output_queue.put(("text", f"\n执行出错: {e}\n"))
         finally:
             elapsed = _time.monotonic() - t0
             logger.info(f"Agent execution finished in {elapsed:.1f}s")
@@ -944,7 +943,7 @@ class SimpleTUI:
             logger.error(f"Command error ({cmd_text}): {e}", exc_info=True)
             with self._fragments_lock:
                 self._fragments.append(("class:error",
-                    f"命令错误: {type(e).__name__}: {e}\n"))
+                    f"命令错误: {e}\n"))
             # 执行失败也从历史记录中移除
             if self._input_history and self._input_history[-1] == cmd_text:
                 self._input_history.pop()
@@ -1108,8 +1107,9 @@ class SimpleTUI:
         )
         self._cron_scheduler.start()
         logger.info("CronScheduler started")
-        self._fragments.append(("class:autonomous",
-            f"\n[自主模式已启用 — {len(config.cron_tasks)} 个定时任务]\n"))
+        with self._fragments_lock:
+            self._fragments.append(("class:autonomous",
+                f"\n[自主模式已启用 — {len(config.cron_tasks)} 个定时任务]\n"))
 
         async def _main():
             self._poll_task = asyncio.create_task(self._poll_output_queue())

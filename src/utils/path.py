@@ -1,7 +1,6 @@
 """Path utility functions for relative path handling"""
 
 import logging
-import os
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -32,7 +31,7 @@ def resolve_path(relative_path: str) -> Path:
     Resolve a relative path from project root.
     Prevents path traversal outside project directory.
     """
-    root = get_project_root()
+    root = get_project_root().resolve()
     # Clean the path to prevent directory traversal
     resolved = (root / relative_path).resolve()
     # Security check: ensure resolved path is within project root

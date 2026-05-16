@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import threading
 from typing import Any, Dict, List, Optional
 
@@ -43,6 +44,7 @@ class Config:
             with cls._lock:
                 if cls._instance is None:
                     cls._instance = super().__new__(cls)
+                    cls._instance._cache_lock = threading.RLock()
                     cls._instance._load_config()
                     cls._instance._load_mcp_config()
         return cls._instance
@@ -107,7 +109,11 @@ class Config:
     # OpenAI / LLM Configuration
     @property
     def api_key(self) -> str:
-        return self._config.get("openai", {}).get("api_key", "")
+        # 优先使用环境变量，其次使用 config.json
+        env_key = os.environ.get("AGIMYCLI_API_KEY")
+        if env_key:
+            logger.debug("Using API key from AGIMYCLI_API_KEY env var")
+        return env_key or self._config.get("openai", {}).get("api_key", "")
 
     @property
     def base_url(self) -> str:
@@ -127,7 +133,7 @@ class Config:
         fb = self._config.get("openai", {}).get("fallback_model", "")
         if not fb:
             return None
-        if isinstance(fb, str):
+        if not isinstance(fb, dict):
             return None
         if not fb.get("model") or not fb.get("base_url") or not fb.get("api_key"):
             return None
@@ -205,6 +211,56 @@ class Config:
         """压缩后保留的最近消息数"""
         return self._config.get("compact", {}).get("preserve_recent_messages", 10)
 
+    @property
+    def compact_collapse_threshold(self) -> float:
+        """上下文折叠触发使用率阈值（0.0-1.0），低于 auto_threshold"""
+        return self._config.get("compact", {}).get("collapse_threshold", 0.75)
+
+    # Tool Result Persistence Configuration
+    @property
+    def tool_result_persistence_enabled(self) -> bool:
+        """工具结果持久化是否启用"""
+        return self._config.get("tool_result_persistence", {}).get("enabled", True)
+
+    @property
+    def tool_result_persistence_threshold_chars(self) -> int:
+        """工具结果超过此字符数则持久化到磁盘"""
+        return self._config.get("tool_result_persistence", {}).get("threshold_chars", 2000)
+
+    @property
+    def tool_result_persistence_max_file_size(self) -> int:
+        """单个持久化文件最大字节数"""
+        return self._config.get("tool_result_persistence", {}).get("max_file_size", 10 * 1024 * 1024)
+
+    # Tool Result Budget Configuration
+    @property
+    def tool_result_budget_max_chars(self) -> int:
+        """每条消息中工具结果最大字符数，超出则替换为占位符"""
+        return self._config.get("tool_result_persistence", {}).get("budget_max_chars", 50000)
+
+    # Persistent Memory Configuration
+    @property
+    def persistent_memory_enabled(self) -> bool:
+        """持久化记忆系统是否启用（默认 True）"""
+        return self._config.get("persistent_memory", {}).get("enabled", True)
+
+    @property
+    def persistent_memory_global_dir(self) -> str:
+        """全局记忆目录路径（空字符串表示不启用全局记忆）"""
+        return self._config.get("persistent_memory", {}).get("global_dir", "")
+
+    @property
+    def persistent_memory_max_index_chars(self) -> int:
+        """注入上下文的 MEMORY.md 最大字符数（默认 4000）"""
+        return self._config.get("persistent_memory", {}).get("max_index_chars", 4000)
+
+    @property
+    def persistent_memory_types(self) -> List[str]:
+        """允许的记忆类型"""
+        return self._config.get("persistent_memory", {}).get(
+            "types", ["user", "feedback", "project", "reference"]
+        )
+
     # Agent Configuration
     @property
     def max_turns(self) -> int:
@@ -239,28 +295,33 @@ class Config:
 
         Assembles: intro + rules + doing_tasks + tool_usage +
         tone_style + output_efficiency + autonomous_instructions.
-        Result is cached per session.
+        Result is cached per session (thread-safe).
         """
         if not hasattr(self, "_system_prompt_cache"):
             self._system_prompt_cache: Optional[str] = None
         if self._system_prompt_cache is not None:
             return self._system_prompt_cache
 
-        sections = []
-        for key in _SYSTEM_SECTIONS:
-            content = self._load_prompt(key, _SYSTEM_SECTION_DEFAULTS.get(key, ""))
-            sections.append(content)
-            logger.debug(f"System prompt section '{key}': {len(content)} chars")
+        with self._cache_lock:
+            # Double-check after acquiring lock
+            if self._system_prompt_cache is not None:
+                return self._system_prompt_cache
 
-        # Append autonomous instructions
-        sections.append(self.autonomous_instructions_prompt)
+            sections = []
+            for key in _SYSTEM_SECTIONS:
+                content = self._load_prompt(key, _SYSTEM_SECTION_DEFAULTS.get(key, ""))
+                sections.append(content)
+                logger.debug(f"System prompt section '{key}': {len(content)} chars")
 
-        self._system_prompt_cache = "\n\n".join(sections)
-        logger.info(
-            f"System prompt assembled: {len(sections)} sections, "
-            f"{len(self._system_prompt_cache)} chars"
-        )
-        return self._system_prompt_cache
+            # Append autonomous instructions
+            sections.append(self.autonomous_instructions_prompt)
+
+            self._system_prompt_cache = "\n\n".join(sections)
+            logger.info(
+                f"System prompt assembled: {len(sections)} sections, "
+                f"{len(self._system_prompt_cache)} chars"
+            )
+            return self._system_prompt_cache
 
     # Tools Configuration
     @property
@@ -301,7 +362,7 @@ class Config:
         return self._config.get("prompts", {})
 
     def _load_prompt(self, key: str, default: str = "") -> str:
-        """Load a prompt from external .md file with caching."""
+        """Load a prompt from external .md file with caching (thread-safe)."""
         cache_key = f"_prompt_cache_{key}"
         if not hasattr(self, cache_key):
             setattr(self, cache_key, None)
@@ -309,20 +370,26 @@ class Config:
         if cached is not None:
             return cached
 
-        path_str = self.prompts_dir.get(key, "")
-        if not path_str:
-            setattr(self, cache_key, default)
-            return default
-        try:
-            path = resolve_path(path_str.removeprefix("./"))
-            content = path.read_text(encoding="utf-8").strip()
-            setattr(self, cache_key, content)
-            logger.debug(f"Loaded prompt '{key}' from {path_str}: {len(content)} chars")
-            return content
-        except Exception:
-            logger.warning(f"Failed to load prompt {key} from {path_str}, using default")
-            setattr(self, cache_key, default)
-            return default
+        with self._cache_lock:
+            # Double-check after acquiring lock
+            cached = getattr(self, cache_key)
+            if cached is not None:
+                return cached
+
+            path_str = self.prompts_dir.get(key, "")
+            if not path_str:
+                setattr(self, cache_key, default)
+                return default
+            try:
+                path = resolve_path(path_str.removeprefix("./"))
+                content = path.read_text(encoding="utf-8").strip()
+                setattr(self, cache_key, content)
+                logger.debug(f"Loaded prompt '{key}' from {path_str}: {len(content)} chars")
+                return content
+            except Exception:
+                logger.warning(f"Failed to load prompt {key} from {path_str}, using default")
+                setattr(self, cache_key, default)
+                return default
 
     @property
     def autonomous_instructions_prompt(self) -> str:
@@ -401,6 +468,17 @@ class Config:
     def skill_dirs(self) -> list:
         """Directories to scan for SKILL.md files (relative to project root)"""
         return self._config.get("skills", {}).get("dirs", ["skills"])
+
+    def set_model(self, model_name: str) -> None:
+        """Set model name in config (thread-safe)"""
+        with self._lock:
+            self._config.setdefault("openai", {})["model"] = model_name
+        logger.info(f"Config model set to: {model_name}")
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a deep copy of the config dict"""
+        with self._lock:
+            return json.loads(json.dumps(self._config))
 
 
 # Global config instance

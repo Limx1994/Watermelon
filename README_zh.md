@@ -9,6 +9,7 @@
 - **MCP 支持**：连接 Model Context Protocol 服务器（Sequential Thinking 等）
 - **鼠标交互**：鼠标滚轮滚动、文本选择、点击聚焦输入
 - **记忆持久化**：会话历史持久保存，长对话自动摘要
+- **跨会话记忆**：基于文件的持久化记忆，支持全局/项目双层作用域，LLM 可调用记忆工具，MEMORY.md 索引注入
 - **中文输入**：优化中文语言输入体验，支持 IME
 - **流式输出**：实时逐 token 显示响应，带样式化片段
 - **样式化显示**：思考内容灰色斜体显示，回答带青色分隔线，Token 栏固定在底部（独立行，靠右对齐）
@@ -17,7 +18,7 @@
 - **模型降级恢复**：主模型失败时自动切换备用模型，恢复后自动切回
 - **快速 Ctrl+C 取消**：重试期间可中断 sleep（0.2 秒响应），SIGINT handler 确保 agent 可靠取消
 - **标准 Cron 调度**：支持 5-field cron 表达式（via croniter），带抖动避免同时触发
-- **斜杠命令**：13 个内置命令（/help、/model、/save、/compact 等），支持 Tab 补全
+- **斜杠命令**：16 个内置命令（/help、/model、/save、/compact 等），支持 Tab 补全
 - **技能系统**：通过 SKILL.md 文件实现可扩展的 prompt 注入，支持 YAML frontmatter 配置、参数替换和工具过滤
 - **上下文进度条**：上下文使用率 >= 50% 时显示进度条，带颜色编码（绿/黄/橙/红）
 - **项目上下文注入**：自动将项目上下文和 git status 注入每次 LLM 调用
@@ -77,6 +78,7 @@ AGImyCLI/
 │   ├── agent.py             # 核心 Agent 循环
 │   ├── config.py            # 配置管理
 │   ├── memory.py            # 记忆和对话历史
+│   ├── persistent_memory.py # 跨会话持久化记忆引擎
 │   ├── llm/
 │   │   └── client.py        # LLM 客户端（兼容 DeepSeek API，可中断 sleep）
 │   ├── tools/
@@ -84,7 +86,8 @@ AGImyCLI/
 │   │   ├── registry.py      # 工具注册表（单例模式）
 │   │   ├── loader.py        # 外部工具加载器
 │   │   ├── external.py      # 外部 CLI 工具执行器
-│   │   └── sleep.py         # Sleep 工具（自主模式空闲等待）
+│   │   ├── sleep.py         # Sleep 工具（自主模式空闲等待）
+│   │   └── memory_tool.py   # 持久化记忆工具（LLM 可调用）
 │   ├── commands/
 │   │   ├── __init__.py      # 包初始化
 │   │   ├── registry.py      # 斜杠命令注册表（CommandRegistry，SlashCommand）
@@ -131,7 +134,6 @@ AGImyCLI/
 │   │   ├── tone_style.md
 │   │   └── output_efficiency.md
 │   ├── service/             # 服务提示词
-│   │   ├── compact_prompt.md
 │   │   ├── compact_resume.md
 │   │   ├── summary_system.md
 │   │   └── summary_template.md
@@ -141,9 +143,10 @@ AGImyCLI/
 │   │   └── token_budget_nudge.md
 │   └── autonomous/
 │       └── instructions.md  # 自主模式行为指令
-├── memory/                  # 对话存储
-│   ├── conversation.json    # 当前会话历史
-│   └── history/             # 归档会话
+├── memory/                  # 对话和持久化记忆存储
+│   ├── *.md                 # 持久化记忆文件（YAML frontmatter）
+│   ├── MEMORY.md            # 持久化记忆索引（自动生成）
+│   └── history/             # 归档会话历史
 ├── mcpdata/                 # MCP 持久化数据
 ├── logs/                    # 日志文件
 ├── config/                  # 配置文件
@@ -191,7 +194,6 @@ AGImyCLI/
 | | `token_budget_nudge` | Token 预算警告提示词路径 | `./prompts/recovery/token_budget_nudge.md` |
 | | `summary_system` | 摘要系统提示词路径 | `./prompts/service/summary_system.md` |
 | | `summary_template` | 摘要模板路径 | `./prompts/service/summary_template.md` |
-| | `compact_prompt` | 压缩提示词路径 | `./prompts/service/compact_prompt.md` |
 | | `system_intro` | 系统提示词 intro 段落路径 | `./prompts/system/intro.md` |
 | | `system_rules` | 系统规则路径 | `./prompts/system/system_rules.md` |
 | | `system_doing_tasks` | 任务执行指南路径 | `./prompts/system/doing_tasks.md` |
@@ -219,6 +221,10 @@ AGImyCLI/
 | | `cron_tasks` | 定时任务定义列表 | `[]` |
 | `skills` | `enabled` | 启用技能系统 | `true` |
 | | `dirs` | 扫描 SKILL.md 文件的目录列表（相对于项目根目录） | `["skills"]` |
+| `persistent_memory` | `enabled` | 启用跨会话持久化记忆 | `true` |
+| | `global_dir` | 全局记忆目录路径（空 = 禁用） | `""` |
+| | `max_index_chars` | 从 MEMORY.md 注入上下文的最大字符数 | `4000` |
+| | `types` | 允许的记忆类型 | `["user", "feedback", "project", "reference"]` |
 
 #### Cron 任务格式
 
@@ -261,7 +267,6 @@ AGImyCLI/
 | `token_budget_nudge` | 上下文使用率过高时注入的警告（支持 `{pct:.0%}` 占位符） |
 | `summary_system` | 摘要生成的系统提示词 |
 | `summary_template` | 摘要生成模板（支持 `{messages}` 占位符） |
-| `compact_prompt` | 压缩摘要生成提示词模板 |
 
 所有提示词可通过编辑 `prompts/` 目录下的 `.md` 文件自定义。路径为空或文件缺失时使用内置默认字符串。
 
@@ -295,10 +300,11 @@ AGImyCLI/
 |------|------|------|
 | `read_file` | `external_tools/read_file/dist/read_file.exe` | 读取文件内容（文本/图片/PDF/Notebook，支持 offset/limit/pages） |
 | `write_file` | `external_tools/write_file/dist/write_file.exe` | 写入文件内容 |
-| `shell` | `external_tools/winshell/dist/winshell.exe` | 执行 PowerShell 命令（别名解析、引号感知操作符转换、复杂脚本使用 .ps1） |
+| `shell` | `external_tools/winshell/dist/winshell.exe` | 执行 PowerShell 命令（别名解析、引号感知操作符转换、复杂脚本使用 .ps1，超时单位为秒） |
 | `grep` | `external_tools/grep/dist/grep.exe` | 搜索文件内容（正则，输出模式，上下文，类型过滤，分页） |
 | `glob` | `external_tools/glob/dist/glob.exe` | 按模式查找文件（最多 50 条） |
 | `edit` | `external_tools/edit/dist/edit.exe` | 精确字符串替换（引号规范化，replace_all 支持） |
+| `memory` | 内置工具 | 跨会话持久化记忆（save/load/list/search，支持全局/项目作用域） |
 
 `tools.json` 示例：
 ```json
@@ -354,7 +360,7 @@ Token 消耗显示在屏幕底部（独立行，靠右对齐）：
 - `⬇`：下载 Token（思考过程）
 - `∫`：累计总 Token
 
-Token 计算规则：
+Token 计算规则（结果取整）：
 - 中文字符：1.3 token/个
 - 英语单词：1.1 token/个
 - 标点符号、数字、其他：1.0 token/个
@@ -390,6 +396,8 @@ Token 计算规则：
 | `/save` | 保存当前会话 |
 | `/load [id]` | 加载已保存的会话 |
 | `/memory [count]` | 显示最近记忆内容 |
+| `/remember [name]` | 显示持久化记忆列表或详情 |
+| `/forget <name>` | 删除指定持久化记忆 |
 | `/compact` | 手动触发上下文压缩 |
 | `/mcp` | 显示 MCP 服务器状态 |
 | `/tools` | 列出可用工具（已配置 + 内置） |

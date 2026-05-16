@@ -61,7 +61,7 @@ def _run_skill_agent(
         tui.agent.run(prompt)
     except Exception as e:
         logger.error(f"Skill agent execution failed: {e}")
-        tui._output_queue.put(("error", f"\n[Skill error]: {type(e).__name__}: {e}\n"))
+        tui._output_queue.put(("error", f"\n[Skill error]: {e}\n"))
     finally:
         # Clear allowed tools override
         if tui.agent:

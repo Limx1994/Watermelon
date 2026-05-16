@@ -32,6 +32,7 @@ from .tools.loader import load_external_tools
 from .mcp.manager import MCPManager
 from .memory import memory, CompactEngine
 from .utils.token_counter import count_tokens
+from .utils.tool_result_persistence import ToolResultPersistence
 
 
 class AgentCancelledError(Exception):
@@ -130,21 +131,21 @@ def get_error_message(error_type: str, e: Exception, retry_count: int = 0, max_r
     retry_info = f" ({retry_count}/{max_retries})" if max_retries > 0 else ""
 
     messages = {
-        "network": f"[网络错误] {type(e).__name__}: {error_msg}{retry_info}\n正在重试...",
-        "rate_limit": f"[速率限制] {type(e).__name__}: {error_msg}{retry_info}\n等待后重试...",
-        "api_server": f"[API服务器错误] {type(e).__name__}: {error_msg}{retry_info}\n服务器暂时不可用，请稍后重试",
-        "api_timeout": f"[请求超时] {type(e).__name__}: {error_msg}{retry_info}\n正在重试...",
-        "api_client": f"[API客户端错误] {type(e).__name__}: {error_msg}\n请检查API配置",
-        "api_auth": f"[认证失败] {type(e).__name__}: {error_msg}\n请检查API密钥",
-        "api_permission": f"[权限不足] {type(e).__name__}: {error_msg}\n请检查账户权限",
-        "api_not_found": f"[模型不存在] {type(e).__name__}: {error_msg}\n请检查模型名称",
-        "context": f"[上下文过长] {type(e).__name__}: {error_msg}{retry_info}\n正在压缩上下文...",
-        "memory": f"[内存不足] {type(e).__name__}: {error_msg}{retry_info}\n正在释放资源...",
-        "disk": f"[磁盘错误] {type(e).__name__}: {error_msg}\n请检查磁盘空间",
-        "permission": f"[权限错误] {type(e).__name__}: {error_msg}\n请检查文件权限",
-        "mcp": f"[MCP错误] {type(e).__name__}: {error_msg}{retry_info}\n正在重连MCP服务器...",
-        "tool": f"[工具错误] {type(e).__name__}: {error_msg}\n请检查工具参数",
-        "unknown": f"[未知错误] {type(e).__name__}: {error_msg}{retry_info}\n详情见日志",
+        "network": f"[网络错误] {error_msg}{retry_info}\n正在重试...",
+        "rate_limit": f"[速率限制] {error_msg}{retry_info}\n等待后重试...",
+        "api_server": f"[API服务器错误] {error_msg}{retry_info}\n服务器暂时不可用，请稍后重试",
+        "api_timeout": f"[请求超时] {error_msg}{retry_info}\n正在重试...",
+        "api_client": f"[API客户端错误] {error_msg}\n请检查API配置",
+        "api_auth": f"[认证失败] {error_msg}\n请检查API密钥",
+        "api_permission": f"[权限不足] {error_msg}\n请检查账户权限",
+        "api_not_found": f"[模型不存在] {error_msg}\n请检查模型名称",
+        "context": f"[上下文过长] {error_msg}{retry_info}\n正在压缩上下文...",
+        "memory": f"[内存不足] {error_msg}{retry_info}\n正在释放资源...",
+        "disk": f"[磁盘错误] {error_msg}\n请检查磁盘空间",
+        "permission": f"[权限错误] {error_msg}\n请检查文件权限",
+        "mcp": f"[MCP错误] {error_msg}{retry_info}\n正在重连MCP服务器...",
+        "tool": f"[工具错误] {error_msg}\n请检查工具参数",
+        "unknown": f"[未知错误] {error_msg}{retry_info}\n详情见日志",
     }
     return messages.get(error_type, messages["unknown"])
 
@@ -157,7 +158,7 @@ def get_retry_interval(error_type: str, retry_count: int) -> int:
 
     base = err_config.get("base_interval", 30)
     max_interval = err_config.get("max_interval", 120)
-    return min(base * (2 ** (retry_count - 1)), max_interval)
+    return int(min(base * (2 ** max(retry_count - 1, 0)), max_interval))
 
 
 class Agent:
@@ -188,8 +189,14 @@ class Agent:
         self.total_tokens: float = 0  # 累计token消耗
         # 上下文压缩引擎
         self._compact_engine = CompactEngine(memory)
-        logger.info(f"Agent initialized: model={config.model}")
-        # Stop hooks: callable(messages, tool_results) -> Optional[str]
+        # 工具结果持久化
+        self._tool_persistence = ToolResultPersistence(
+            threshold_chars=config.tool_result_persistence_threshold_chars,
+            max_file_size=config.tool_result_persistence_max_file_size,
+        )
+        logger.info(f"Agent initialized: model={config.model}, "
+                    f"tool_persistence={config.tool_result_persistence_enabled}")
+        # Stop hooks: callable(messages, tool_calls) -> Optional[str]
         self._stop_hooks: list = []
         # Skill allowed-tools override (set by skill handler)
         self._allowed_tools_override: Optional[List[str]] = None
@@ -219,6 +226,16 @@ class Agent:
         registry.register(sleep_tool)
         # Register skill tool if skills are loaded
         self._try_register_skill_tool()
+        # Register persistent memory tool
+        if config.persistent_memory_enabled:
+            try:
+                from .tools.memory_tool import MemoryTool
+                registry.register(MemoryTool())
+                logger.debug("MemoryTool registered")
+            except Exception as e:
+                logger.warning(f"MemoryTool registration failed: {e}", exc_info=True)
+        else:
+            logger.debug("MemoryTool skipped: persistent_memory disabled")
         logger.info(f"Tools registered: {registry.list_tools()}")
 
     def _try_register_skill_tool(self) -> None:
@@ -249,7 +266,7 @@ class Agent:
             logger.error(f"[agent] {tool_name} failed: {type(e).__name__}: {e}", exc_info=True)
             return {
                 "success": False,
-                "error": f"Tool execution error: {type(e).__name__}: {str(e)[:500]}"
+                "error": f"Tool execution error: {str(e)[:500]}"
             }
 
     def submit_work(self, text: str, source: str = "cron") -> None:
@@ -266,17 +283,27 @@ class Agent:
         with self._pending_lock:
             return len(self._pending_inputs)
 
-    def _run_stop_hooks(self, messages: list, tool_results: list) -> Optional[str]:
+    def _run_stop_hooks(self, messages: list, tool_calls: list) -> Optional[str]:
         """Run all stop hooks. Returns first blocking error message, or None."""
         for hook in self._stop_hooks:
             try:
-                error = hook(messages, tool_results)
+                error = hook(messages, tool_calls)
                 if error:
                     logger.debug(f"Stop hook triggered: {error[:100]}")
                     return error
             except Exception as e:
-                logger.error(f"Stop hook error: {e}")
+                logger.error(f"Stop hook error: {e}", exc_info=True)
         return None
+
+    def register_stop_hook(self, callback: Callable) -> None:
+        """Register a callback to run after each tool round.
+
+        Args:
+            callback: callable(messages, tool_calls) -> Optional[str]
+                      Return a non-empty string to inject as a blocking error message.
+        """
+        if callback not in self._stop_hooks:
+            self._stop_hooks.append(callback)
 
     def _stream_output(self, text: str, msg_type: str = "text", force: bool = False) -> None:
         """Stream output to callback with type indicator.
@@ -304,6 +331,22 @@ class Agent:
                 logger.warning(f"Project context: failed to read CLAUDE.md: {e}")
         else:
             logger.debug("Project context: CLAUDE.md not found")
+
+        # Inject persistent memory index (global + project)
+        if config.persistent_memory_enabled:
+            try:
+                from .persistent_memory import persistent_memory
+                mem_idx = persistent_memory.load_index()
+                if mem_idx:
+                    max_chars = config.persistent_memory_max_index_chars
+                    if len(mem_idx) > max_chars:
+                        mem_idx = mem_idx[:max_chars] + "\n\n... (truncated)"
+                    parts.append(f"Cross-session memories:\n{mem_idx}")
+                    logger.debug(
+                        f"Project context: memory index injected ({len(mem_idx)} chars)"
+                    )
+            except Exception as e:
+                logger.warning(f"Project context: memory index injection failed: {e}", exc_info=True)
 
         # Inject git status
         try:
@@ -368,6 +411,29 @@ class Agent:
                 self.start_autonomous_loop()
             return result
 
+    def _apply_tool_result_budget(self, messages: list) -> int:
+        """Enforce per-message tool result budget. Replaces oversized results.
+
+        Returns number of tokens saved.
+        """
+        if not config.tool_result_budget_max_chars:
+            return 0
+        from .utils.token_counter import count_tokens
+        saved = 0
+        for m in messages:
+            if m.get("role") != "tool":
+                continue
+            content = m.get("content", "") or ""
+            if len(content) <= config.tool_result_budget_max_chars:
+                continue
+            tokens = count_tokens(content)
+            m["content"] = f"[Tool result truncated: ~{int(tokens)} tokens]"
+            saved += tokens
+            logger.debug(f"Tool result budget: truncated {len(content)} -> {len(m['content'])}")
+        if saved > 0:
+            logger.info(f"Tool result budget: saved ~{saved} tokens")
+        return saved
+
     def _run_inner(self, user_input: str) -> str:
         """Internal run logic (called with _run_lock held)."""
         logger.info(f"_run_inner start: input={user_input[:80]}...")
@@ -386,8 +452,19 @@ class Agent:
         memory.add_message("user", user_input)
         self._compact_engine.record_user_message()
 
-        # Get all available tools
-        tools = list(self.llm.tools)
+        # Get all available tools from registry + MCP
+        tools = []
+        for tool_name in registry.list_tools():
+            tool_obj = registry.get(tool_name)
+            if tool_obj and hasattr(tool_obj, 'get_schema'):
+                tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": tool_name,
+                        "description": tool_obj.description,
+                        "parameters": tool_obj.get_schema()
+                    }
+                })
         tools.extend(self.mcp_manager.get_all_tool_definitions())
 
         # Apply allowed-tools filter for skills
@@ -395,6 +472,9 @@ class Agent:
             allowed = set(self._allowed_tools_override)
             tools = [t for t in tools if t.get("function", {}).get("name") in allowed]
             logger.debug(f"Skill tool filter: {len(tools)} tools allowed")
+
+        # Session ID for persistence and cleanup
+        session_id = memory._session_id
 
         # Pre-loop compression check
         current_tokens = self._calculate_context_tokens(messages)
@@ -409,6 +489,9 @@ class Agent:
                     f"\n[上下文压缩: L{level} • 节省 ~{result['tokens_saved']} tokens • 移除 {result['messages_removed']} 条消息]\n",
                     "compact"
                 )
+                # Full Compact: 清理持久化工具结果
+                if level == CompactEngine.LEVEL_FULL and config.tool_result_persistence_enabled:
+                    self._tool_persistence.clear_session(session_id)
                 messages = [create_system_message(config.get_system_prompt())]
                 messages.extend(memory.get_conversation_for_llm())
                 messages.append(create_user_message(config.compact_resume_prompt))
@@ -429,6 +512,8 @@ class Agent:
                             f"\n[追加压缩: L{target_level} • 节省 ~{result['tokens_saved']} tokens]\n",
                             "compact"
                         )
+                        if target_level == CompactEngine.LEVEL_FULL and config.tool_result_persistence_enabled:
+                            self._tool_persistence.clear_session(session_id)
                         messages = [create_system_message(config.get_system_prompt())]
                         messages.extend(memory.get_conversation_for_llm())
                         messages.append(create_user_message(config.compact_resume_prompt))
@@ -476,9 +561,13 @@ class Agent:
             turns += 1
             logger.debug(f"Turn {turns}/{max_turns}, tool_calls={len(tool_calls) if 'tool_calls' in locals() else 0}")
 
+            # Apply tool result budget before sending to LLM
+            if config.tool_result_persistence_enabled:
+                self._apply_tool_result_budget(messages)
+
             # API call with error recovery for prompt-too-long and model degradation
             try:
-                tool_calls, content, reasoning, finish_reason = self.llm.get_tool_calls(messages, tools)
+                tool_calls, llm_content, llm_reasoning, finish_reason = self.llm.get_tool_calls(messages, tools)
                 consecutive_errors = 0
                 # Restore original model if it was degraded and succeeded
                 if self.llm.model != self.llm._original_model:
@@ -502,11 +591,33 @@ class Agent:
                 if error_type == "context":
                     consecutive_errors += 1
                     if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                        logger.warning(f"Too many consecutive errors ({consecutive_errors}), stopping")
                         self._stream_output("\n[Error]: Too many consecutive errors, stopping.\n")
                         break
                     self._stream_output(f"\n{config.context_too_long_prompt}\n", "compact")
-                    result = self._compact_engine.compact(CompactEngine.LEVEL_FULL, self.llm)
-                    if result["compacted"]:
+                    # 多级恢复：先尝试剥离旧消息（零成本），再 Auto/Full Compact
+                    recovered = False
+                    # Step 1: 尝试剥离旧工具结果（零成本）
+                    stripped = self._apply_tool_result_budget(messages)
+                    if stripped > 0:
+                        current_tokens = self._calculate_context_tokens(messages)
+                        usage_ratio = current_tokens / config.effective_context_window if config.effective_context_window > 0 else 0
+                        if usage_ratio < config.compact_auto_threshold:
+                            self._stream_output(f"[剥离旧结果 — 节省 ~{stripped} tokens]\n", "compact")
+                            recovered = True
+                    # Step 2: 尝试 Auto Compact
+                    if not recovered:
+                        result = self._compact_engine.compact(CompactEngine.LEVEL_AUTO, self.llm)
+                        if result["compacted"]:
+                            recovered = True
+                    # Step 3: 尝试 Full Compact
+                    if not recovered:
+                        result = self._compact_engine.compact(CompactEngine.LEVEL_FULL, self.llm)
+                        if result["compacted"]:
+                            if config.tool_result_persistence_enabled:
+                                self._tool_persistence.clear_session(session_id)
+                            recovered = True
+                    if recovered:
                         messages = [create_system_message(config.get_system_prompt())]
                         messages.extend(memory.get_conversation_for_llm())
                         messages.append(create_user_message(config.compact_resume_prompt))
@@ -518,40 +629,39 @@ class Agent:
 
             # Handle tool calls (with optional reasoning/content display)
             if tool_calls:
-                if config.show_thinking and reasoning:
-                    for line in reasoning.split('\n'):
+                if config.show_thinking and llm_reasoning:
+                    for line in llm_reasoning.split('\n'):
                         if line.strip():
                             self._stream_output(f"{line}\n", "thinking")
                     self._stream_output("\n", "thinking")
-                if content:
-                    self._stream_output(content + "\n", "answer")
+                if llm_content:
+                    self._stream_output(llm_content + "\n", "answer")
                 assistant_msg: Dict[str, Any] = {
-                    "role": "assistant", "content": content,
+                    "role": "assistant", "content": llm_content,
                     "tool_calls": [{
                         "id": tc["id"], "type": "function",
                         "function": {"name": tc["name"], "arguments": tc["arguments"]}
                     } for tc in tool_calls]
                 }
-                if reasoning:
-                    assistant_msg["reasoning_content"] = reasoning
-                    logger.debug(f"Tool-call assistant msg: included reasoning_content ({len(reasoning)} chars)")
+                if llm_reasoning:
+                    assistant_msg["reasoning_content"] = llm_reasoning
+                    logger.debug(f"Tool-call assistant msg: included reasoning_content ({len(llm_reasoning)} chars)")
                 messages.append(assistant_msg)
 
-            # needsFollowUp: no tool calls = final response
+            # needsFollowUp: no tool calls = final response (reuse content from get_tool_calls)
             if not tool_calls:
-                try:
-                    final_response, final_reasoning, usage, fr = self.llm.chat(
-                        messages, tools=tools, stream=True,
-                        callback=wrap_callback
-                    )
-                except AgentCancelledError:
-                    raise
-                except Exception as e:
-                    logger.error(f"Streaming chat failed: {e}", exc_info=True)
-                    self._stream_output(f"\n[Error]: LLM streaming failed: {type(e).__name__}: {str(e)[:200]}\n")
-                    break
+                final_response = llm_content
+                final_reasoning = llm_reasoning
+                # Stream the response via callback (already received from get_tool_calls)
+                if final_reasoning and config.show_thinking:
+                    for line in final_reasoning.split('\n'):
+                        if line.strip():
+                            self._stream_output(f"{line}\n", "thinking")
+                    self._stream_output("\n", "thinking")
+                if final_response:
+                    wrap_callback(final_response, is_reasoning=False)
                 # Max output tokens recovery
-                if fr == "length":
+                if finish_reason == "length":
                     messages.append(create_assistant_message(final_response, final_reasoning))
                     messages.append(create_user_message(config.max_tokens_recovery_prompt))
                     self._stream_output("\n[输出截断 — 继续...]\n", "compact")
@@ -614,7 +724,14 @@ class Agent:
 
                 # Output results in submission order
                 for tc, result in ordered_results:
-                    messages.append(create_tool_result_message(tc["id"], result.get("content", "")))
+                    content = result.get("content", "")
+                    if config.tool_result_persistence_enabled:
+                        ref = self._tool_persistence.persist_if_large(
+                            content, tc["id"], tc.get("name", "?"), session_id
+                        )
+                        if ref:
+                            content = ref
+                    messages.append(create_tool_result_message(tc["id"], content))
                     if result.get("success"):
                         self._stream_output(f"[Result]:\n{result.get('content', '')[:TRUNCATE_CONTENT_LENGTH]}\n", "tool_result")
                     else:
@@ -625,7 +742,14 @@ class Agent:
                 self._stream_output(f"\n[Calling tool: {tool_name}]\n", "tool_call")
                 result = self._execute_tool_call(tool_name, arguments)
                 self._compact_engine.increment_streak()
-                messages.append(create_tool_result_message(tc["id"], result.get("content", "")))
+                content = result.get("content", "")
+                if config.tool_result_persistence_enabled:
+                    ref = self._tool_persistence.persist_if_large(
+                        content, tc["id"], tool_name, session_id
+                    )
+                    if ref:
+                        content = ref
+                messages.append(create_tool_result_message(tc["id"], content))
                 if result.get("success"):
                     self._stream_output(f"[Result]:\n{result.get('content', '')[:TRUNCATE_CONTENT_LENGTH]}\n", "tool_result")
                 else:
@@ -649,6 +773,8 @@ class Agent:
                         f"\n[上下文压缩: L{level} • 节省 ~{result['tokens_saved']} tokens]\n",
                         "compact"
                     )
+                    if level == CompactEngine.LEVEL_FULL and config.tool_result_persistence_enabled:
+                        self._tool_persistence.clear_session(session_id)
                     messages = [create_system_message(config.get_system_prompt())]
                     messages.extend(memory.get_conversation_for_llm())
                     messages.append(create_user_message(config.compact_resume_prompt))
@@ -658,19 +784,24 @@ class Agent:
 
             self._stream_output(f"{current_tokens / config.effective_context_window if config.effective_context_window > 0 else 0:.2f}", "context_usage")
 
-            # Token budget nudge: inject message to keep AI working
+            # Token budget nudge: inject message to keep AI working (avoid duplicates)
             usage_ratio = current_tokens / config.effective_context_window if config.effective_context_window > 0 else 0
-            if usage_ratio >= config.nudge_threshold:
+            if usage_ratio >= config.nudge_threshold and not any(
+                m.get("content", "").startswith("Context at") for m in messages if m.get("role") == "user"
+            ):
                 nudge_msg = config.get_nudge_prompt(usage_ratio)
                 messages.append(create_user_message(nudge_msg))
                 logger.info(f"Token nudge injected: usage={usage_ratio:.0%} threshold={config.nudge_threshold:.0%}")
                 self._stream_output(f"\n[Token 预算警告: {usage_ratio:.0%} — 注入 nudge 消息]\n", "compact")
+            elif usage_ratio >= config.nudge_threshold:
+                logger.debug(f"Token nudge skipped: duplicate exists, usage={usage_ratio:.0%}")
 
         if turns >= max_turns:
             logger.warning(f"Agent max_turns reached: {turns}/{max_turns}")
 
-        # Save assistant response to memory
-        memory.add_message("assistant", final_response, reasoning_content=final_reasoning)
+        # Save assistant response to memory (only if valid)
+        if final_response and final_response.strip():
+            memory.add_message("assistant", final_response, reasoning_content=final_reasoning)
 
         # Clear skill tools override
         self._allowed_tools_override = None
@@ -712,6 +843,7 @@ class Agent:
         self._autonomous_running = True
         self._stream_output("\n[自主模式已激活 — 等待任务...]\n", "compact")
         logger.info("Autonomous mode activated")
+        _cancelled = False
 
         try:
             while not (self.stop_event and self.stop_event.is_set()):
@@ -743,7 +875,10 @@ class Agent:
                         with self._run_lock:
                             self._run_inner(text)
                     except AgentCancelledError:
+                        _cancelled = True
+                        logger.info("Autonomous task cancelled")
                         self._stream_output("\n[任务已取消]\n", force=True)
+                        # 不 send _autonomous_done — 外层 finally 会 send _agent_done
                         return
                     except Exception as e:
                         error_type = classify_error(e)
@@ -761,7 +896,11 @@ class Agent:
                             self._stream_output(f"\n{error_msg}\n", "error")
                             logger.warning(f"Retryable error: {error_type}, retry {new_retry_count}/{max_retries}")
 
-                            self._interruptible_sleep(wait_time)
+                            try:
+                                self._interruptible_sleep(wait_time)
+                            except AgentCancelledError:
+                                _cancelled = True
+                                raise
                             with self._pending_lock:
                                 self._pending_inputs.append({"text": text, "source": source, "retry_count": new_retry_count})
                             self._work_event.set()
@@ -772,9 +911,13 @@ class Agent:
                                 error_msg += f"\n已达到最大重试次数 ({max_retries})"
                             self._stream_output(f"\n{error_msg}\n", "error", force=True)
                             logger.error(f"Task failed: {error_type}: {e}", exc_info=True)
-                            self._interruptible_sleep(1)
+                            try:
+                                self._interruptible_sleep(1)
+                            except AgentCancelledError:
+                                _cancelled = True
+                                raise
                     finally:
-                        if self.output_callback and self.get_pending_count() == 0:
+                        if not _cancelled and self.output_callback and self.get_pending_count() == 0:
                             self.output_callback("_autonomous_done", "")
 
                 if self.stop_event and self.stop_event.is_set():

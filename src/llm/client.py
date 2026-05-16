@@ -3,7 +3,6 @@
 import json
 import logging
 import time
-from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from openai import OpenAI
@@ -33,23 +32,6 @@ def is_network_error(e: Exception) -> bool:
     return any(kw in error_str for kw in ("connection", "timeout", "network", "dns", "connect"))
 
 
-def load_tools_from_json() -> List[Dict[str, Any]]:
-    """Load tools definition from tools.json file"""
-    tools_path = Path(__file__).parent.parent.parent / "config" / "tools.json"
-    if not tools_path.exists():
-        logger.debug("tools.json not found")
-        return []
-    try:
-        with open(tools_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        tools = data.get("tools", [])
-        logger.debug(f"Loaded {len(tools)} tools from tools.json")
-        return tools
-    except Exception as e:
-        logger.warning(f"Failed to load tools.json: {e}")
-        return []
-
-
 class LLMClient:
     """OpenAI compatible client for DeepSeek API with thinking mode support"""
 
@@ -74,9 +56,7 @@ class LLMClient:
         self.temperature = config.temperature
         self.top_p = config.top_p
         self.reasoning_effort = config.reasoning_effort
-        # Load tools from tools.json
-        self.tools = load_tools_from_json()
-        logger.debug(f"Loaded {len(self.tools)} tools from tools.json")
+        logger.debug(f"LLMClient initialized")
 
     def _interruptible_sleep(self, seconds: float) -> None:
         """Sleep for up to seconds, checking stop_event every 0.2s.
@@ -168,6 +148,8 @@ class LLMClient:
                 logger.warning(f"Unexpected error {e}, retry in {wait}s (attempt {attempt+1}/{config.max_retries})")
                 self._interruptible_sleep(wait)
                 last_error = e
+        if last_error is None:
+            last_error = Exception(f"All retries exhausted for model={self.model} with no error captured")
         logger.error(f"All retries exhausted for model={self.model}, last error: {last_error}")
         raise last_error
 
@@ -190,7 +172,7 @@ class LLMClient:
             usage_callback: Optional callback for receiving usage info (prompt_tokens, completion_tokens, total_tokens)
 
         Returns:
-            Tuple of (response_content, reasoning_content, usage_dict)
+            Tuple of (response_content, reasoning_content, usage_dict, finish_reason)
             usage_dict is only available in non-streaming mode
         """
         t0 = time.monotonic()

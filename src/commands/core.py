@@ -12,6 +12,9 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from ..tui import SimpleTUI
 
+# 角色映射常量
+_ROLE_MAP = {"user": "用户", "assistant": "助手", "system": "系统", "tool": "工具"}
+
 
 # ── /help ──────────────────────────────────────────────────
 
@@ -59,11 +62,11 @@ def cmd_model(tui: "SimpleTUI", args: str) -> None:
     try:
         if tui.agent and tui.agent.llm:
             tui.agent.llm.switch_model(model_name)
-        config._config.setdefault("openai", {})["model"] = model_name
+        config.set_model(model_name)
         _output(tui, f"\n模型已切换为: {model_name}\n")
     except Exception as e:
-        logger.error(f"Model switch failed: {e}")
-        _output(tui, f"\n模型切换失败: {e}\n", "class:error")
+        logger.error(f"Model switch failed: {e}", exc_info=True)
+        _output(tui, "\n模型切换失败，请查看日志\n", "class:error")
 
 
 # ── /config ────────────────────────────────────────────────
@@ -72,11 +75,14 @@ def cmd_config(tui: "SimpleTUI", args: str) -> None:
     from ..config import config
     logger.debug("Command: /config")
     # 隐藏敏感信息
-    display_config = json.loads(json.dumps(config._config))
+    display_config = config.to_dict()
     if "openai" in display_config and "api_key" in display_config["openai"]:
         key = display_config["openai"]["api_key"]
         if key:
-            display_config["openai"]["api_key"] = key[:4] + "****" + key[-4:] if len(key) > 8 else "****"
+            if len(key) > 8:
+                display_config["openai"]["api_key"] = key[:4] + "****" + key[-4:]
+            else:
+                display_config["openai"]["api_key"] = "****"
     text = json.dumps(display_config, indent=2, ensure_ascii=False)
     _output(tui, f"\n当前配置:\n{text}\n")
 
@@ -90,11 +96,12 @@ def cmd_history(tui: "SimpleTUI", args: str) -> None:
     if not messages:
         _output(tui, "\n对话历史为空\n")
         return
-    role_map = {"user": "用户", "assistant": "助手", "system": "系统", "tool": "工具"}
     lines = [f"\n对话历史 ({len(messages)} 条消息):\n"]
     for i, msg in enumerate(messages, 1):
-        role = role_map.get(msg.get("role", ""), msg.get("role", "?"))
+        role = _ROLE_MAP.get(msg.get("role", ""), msg.get("role", "?"))
         content = msg.get("content", "")
+        if isinstance(content, list):
+            content = str(content)
         preview = content[:80].replace("\n", " ") if content else "(空)"
         if len(content) > 80:
             preview += "..."
@@ -159,11 +166,13 @@ def cmd_load(tui: "SimpleTUI", args: str) -> None:
         # 显示前 5 条消息摘要
         recent = memory.get_context(5)
         if recent:
-            role_map = {"user": "用户", "assistant": "助手", "system": "系统", "tool": "工具"}
             lines = ["\n最近消息:\n"]
             for msg in recent:
-                role = role_map.get(msg.get("role", ""), msg.get("role", "?"))
-                content = (msg.get("content", "") or "")[:80].replace("\n", " ")
+                role = _ROLE_MAP.get(msg.get("role", ""), msg.get("role", "?"))
+                content = (msg.get("content", "") or "")
+                if isinstance(content, list):
+                    content = str(content)
+                content = content[:80].replace("\n", " ")
                 lines.append(f"  [{role}] {content}\n")
             _output(tui, "".join(lines))
     else:
@@ -188,15 +197,24 @@ def cmd_memory(tui: "SimpleTUI", args: str) -> None:
     if not messages:
         _output(tui, "\n内存中没有消息\n")
         return
-    role_map = {"user": "用户", "assistant": "助手", "system": "系统", "tool": "工具"}
     lines = [f"\n最近 {len(messages)} 条记忆:\n"]
     for msg in messages:
-        role = role_map.get(msg.get("role", ""), msg.get("role", "?"))
+        role = _ROLE_MAP.get(msg.get("role", ""), msg.get("role", "?"))
         content = msg.get("content", "")
+        if isinstance(content, list):
+            content = str(content)
         preview = content[:100].replace("\n", " ") if content else "(空)"
         if len(content) > 100:
             preview += "..."
         lines.append(f"  [{role}] {preview}\n")
+    # 持久化记忆提示
+    try:
+        from ..persistent_memory import persistent_memory
+        pm_count = persistent_memory.count()
+        if pm_count > 0:
+            lines.append(f"\n  提示: 还有 {pm_count} 条持久化记忆，用 /remember 查看\n")
+    except Exception:
+        pass
     _output(tui, "".join(lines))
 
 
@@ -212,9 +230,9 @@ def cmd_compact(tui: "SimpleTUI", args: str) -> None:
 
     def _run():
         try:
-            from ..memory import CompactEngine, memory
-            # 获取读锁，确保不与 agent 写入冲突
-            with memory._rw_lock:
+            from ..memory import CompactEngine
+            # 获取 _run_lock 防止与 agent._run_inner() 并发修改 history
+            with tui.agent._run_lock:
                 result = tui.agent._compact_engine.compact(
                     CompactEngine.LEVEL_FULL, tui.agent.llm
                 )
@@ -230,7 +248,7 @@ def cmd_compact(tui: "SimpleTUI", args: str) -> None:
             tui._output_queue.put(("compact", ""))
         except Exception as e:
             logger.error(f"Manual compact failed: {e}", exc_info=True)
-            tui._output_queue.put(("error", f"\n压缩失败: {e}\n"))
+            tui._output_queue.put(("error", "\n压缩失败，请查看日志\n"))
 
     threading.Thread(target=_run, daemon=True).start()
 
@@ -323,6 +341,79 @@ def cmd_version(tui: "SimpleTUI", args: str) -> None:
     _output(tui, "".join(lines))
 
 
+# ── /exit ──────────────────────────────────────────────────
+
+def cmd_exit(tui: "SimpleTUI", args: str) -> None:
+    logger.info("Exit command received")
+    if tui.app:
+        tui.app.exit()
+    else:
+        import sys
+        sys.exit(0)
+
+
+# ── /remember ──────────────────────────────────────────────
+
+def cmd_remember(tui: "SimpleTUI", args: str) -> None:
+    from ..persistent_memory import persistent_memory
+    arg = args.strip()
+    logger.info(f"Command: /remember {arg}")
+
+    if not arg:
+        memories = persistent_memory.load_all()
+        logger.debug(f"/remember list -> {len(memories)} memories")
+        if not memories:
+            _output(tui, "\n没有持久化记忆\n")
+            return
+        lines = [f"\n持久化记忆 ({len(memories)} 条):\n"]
+        for mem in memories:
+            age = mem.get("age_days", 0)
+            age_str = f"{age}天前" if age > 0 else "今天"
+            scope_tag = mem.get("scope", "?")
+            preview = mem.get("content", "")[:80].replace("\n", " ")
+            if len(mem.get("content", "")) > 80:
+                preview += "..."
+            lines.append(
+                f"  [{mem.get('type', '?')}/{scope_tag}] {mem.get('name', '?')}\n"
+                f"    {mem.get('description', '(无描述)')}\n"
+                f"    更新: {age_str} | 内容: {preview}\n"
+            )
+        _output(tui, "".join(lines))
+    else:
+        mem = persistent_memory.load(arg)
+        if not mem:
+            logger.info(f"/remember: '{arg}' not found")
+            _output(tui, f"\n未找到记忆: {arg}\n", "class:error")
+            return
+        logger.debug(f"/remember load '{arg}' -> found")
+        lines = [
+            f"\n记忆: {mem.get('name', '?')}\n",
+            f"  类型: {mem.get('type', '?')}\n",
+            f"  作用域: {mem.get('scope', '?')}\n",
+            f"  描述: {mem.get('description', '(无)')}\n",
+            f"  创建: {mem.get('created', '?')}\n",
+            f"  更新: {mem.get('updated', '?')}\n",
+            f"\n--- 内容 ---\n{mem.get('content', '')}\n---\n",
+        ]
+        _output(tui, "".join(lines))
+
+
+# ── /forget ────────────────────────────────────────────────
+
+def cmd_forget(tui: "SimpleTUI", args: str) -> None:
+    from ..persistent_memory import persistent_memory
+    name = args.strip()
+    if not name:
+        _output(tui, "\n用法: /forget <记忆名称>\n", "class:error")
+        return
+    logger.info(f"Command: /forget {name}")
+    if persistent_memory.delete(name):
+        _output(tui, f"\n已删除记忆: {name}\n")
+    else:
+        logger.warning(f"/forget failed: memory '{name}' not found")
+        _output(tui, f"\n未找到记忆: {name}\n", "class:error")
+
+
 # ── 注册 ───────────────────────────────────────────────────
 
 def register_core_commands(registry) -> None:
@@ -341,3 +432,6 @@ def register_core_commands(registry) -> None:
     registry.register("tools", "列出可用工具", cmd_tools)
     registry.register("system", "显示系统提示词", cmd_system)
     registry.register("version", "显示版本信息", cmd_version)
+    registry.register("remember", "显示持久化记忆列表或详情", cmd_remember, arg_spec="[name]")
+    registry.register("forget", "删除指定持久化记忆", cmd_forget, arg_spec="<name>")
+    registry.register("exit", "退出程序", cmd_exit)

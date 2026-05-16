@@ -1,1 +1,0 @@
-# edit tool dependencies (standalone, no external deps needed)

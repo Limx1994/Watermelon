@@ -2,6 +2,7 @@
 
 import logging
 import platform
+import sys
 
 # Initialize logging BEFORE any other imports
 from src.utils.logging import setup_logging
@@ -29,6 +30,7 @@ def main():
         run_tui()
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)
+        sys.exit(1)
     logger.info("AGImyCLI exit")
 
 

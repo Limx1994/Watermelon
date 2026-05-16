@@ -28,7 +28,7 @@ def _get_encoder():
     return _ENCODER
 
 
-def count_tokens(text: str) -> float:
+def count_tokens(text: str) -> int:
     """计算文本token数
 
     优先使用 tiktoken 精确计算（如果可用），否则回退到估算规则：
@@ -38,13 +38,13 @@ def count_tokens(text: str) -> float:
     - 数字：1 token/个
     """
     if not text:
-        return 0.0
+        return 0
 
     # 尝试使用 tiktoken
     encoder = _get_encoder()
     if encoder:
         try:
-            return float(len(encoder.encode(text)))
+            return len(encoder.encode(text))
         except Exception:
             logger.debug("tiktoken encode failed, using estimation fallback")
 
@@ -56,4 +56,4 @@ def count_tokens(text: str) -> float:
     classified = chinese + english + punctuation + digits
     other = len(text) - classified
 
-    return chinese * 1.3 + english * 1.1 + (punctuation + digits + other) * 1.0
+    return round(chinese * 1.3 + english * 1.1 + (punctuation + digits + other) * 1.0)

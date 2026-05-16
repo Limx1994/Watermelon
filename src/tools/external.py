@@ -65,7 +65,15 @@ class ExternalTool(BaseTool):
             logger.debug(f"[tool:{self.name}] cmd_parts={cmd_parts}")
             t0 = time.monotonic()
             _user_timeout = kwargs.get("timeout")
-            _sub_timeout = max(10, int(_user_timeout) // 1000 + 10) if _user_timeout else 70
+            if _user_timeout is not None:
+                try:
+                    _timeout_val = int(_user_timeout)
+                    # 统一以秒为单位，加 10 秒缓冲
+                    _sub_timeout = max(10, _timeout_val + 10)
+                except (ValueError, TypeError):
+                    _sub_timeout = 70
+            else:
+                _sub_timeout = 70
             result = subprocess.run(
                 cmd_parts,
                 capture_output=True,

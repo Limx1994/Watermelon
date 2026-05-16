@@ -9,6 +9,7 @@ A TUI (Text User Interface) AGI interaction tool inspired by Claude Code, built 
 - **MCP support**: Connect to Model Context Protocol servers (Sequential Thinking, etc.)
 - **Mouse interaction**: Mouse wheel scrolling, text selection, click-to-focus input
 - **Memory persistence**: Conversation history saved between sessions, auto-summary for long conversations
+- **Cross-session memory**: Persistent file-based memory with global/project scopes, LLM-invokable memory tool, MEMORY.md index injection
 - **Chinese input**: Optimized for Chinese language input with IME support
 - **Streaming output**: Real-time token-by-token response display with styled fragments
 - **Styled display**: Thinking in gray italic, answer with cyan separator, token bar fixed at bottom (independent row, right-aligned)
@@ -17,7 +18,7 @@ A TUI (Text User Interface) AGI interaction tool inspired by Claude Code, built 
 - **Model degradation recovery**: Auto-switch to fallback model on failure, auto-restore on success
 - **Fast Ctrl+C cancellation**: Interruptible sleep during retries (0.2s response), SIGINT handler for reliable agent cancellation
 - **Standard cron scheduling**: 5-field cron expressions via croniter, with jitter to avoid simultaneous triggers
-- **Slash commands**: 13 built-in commands (/help, /model, /save, /compact, etc.) with Tab completion
+- **Slash commands**: 16 built-in commands (/help, /model, /save, /compact, etc.) with Tab completion
 - **Skill system**: Extensible prompt injection via SKILL.md files with YAML frontmatter, argument substitution, and tool filtering
 - **Context usage bar**: Progress bar at >= 50% context usage with color coding (green/yellow/orange/red)
 - **Project context injection**: Automatically injects project context and git status into each LLM call
@@ -77,6 +78,7 @@ AGImyCLI/
 │   ├── agent.py             # Core agent loop
 │   ├── config.py            # Configuration management
 │   ├── memory.py            # Memory and conversation history
+│   ├── persistent_memory.py # Cross-session persistent memory engine
 │   ├── llm/
 │   │   └── client.py        # LLM client (DeepSeek API compatible, interruptible sleep)
 │   ├── tools/
@@ -84,7 +86,8 @@ AGImyCLI/
 │   │   ├── registry.py      # Tool registry (singleton)
 │   │   ├── loader.py        # External tool loader
 │   │   ├── external.py      # External CLI tool executor
-│   │   └── sleep.py         # Sleep tool for autonomous idle waiting
+│   │   ├── sleep.py         # Sleep tool for autonomous idle waiting
+│   │   └── memory_tool.py   # Persistent memory tool (LLM-invokable)
 │   ├── commands/
 │   │   ├── __init__.py      # Package init
 │   │   ├── registry.py      # Slash command registry (CommandRegistry, SlashCommand)
@@ -131,7 +134,6 @@ AGImyCLI/
 │   │   ├── tone_style.md
 │   │   └── output_efficiency.md
 │   ├── service/             # Service prompts
-│   │   ├── compact_prompt.md
 │   │   ├── compact_resume.md
 │   │   ├── summary_system.md
 │   │   └── summary_template.md
@@ -141,9 +143,10 @@ AGImyCLI/
 │   │   └── token_budget_nudge.md
 │   └── autonomous/
 │       └── instructions.md  # Autonomous mode behavior
-├── memory/                  # Conversation storage
-│   ├── conversation.json    # Current session history
-│   └── history/             # Archived sessions
+├── memory/                  # Conversation and persistent memory storage
+│   ├── *.md                 # Persistent memory files (YAML frontmatter)
+│   ├── MEMORY.md            # Persistent memory index (auto-generated)
+│   └── history/             # Archived session history
 ├── mcpdata/                 # MCP persistence data
 ├── logs/                    # Log files
 ├── config/                  # Configuration files
@@ -191,7 +194,6 @@ AGImyCLI/
 | | `token_budget_nudge` | Path to token budget nudge prompt | `./prompts/recovery/token_budget_nudge.md` |
 | | `summary_system` | Path to summary system prompt | `./prompts/service/summary_system.md` |
 | | `summary_template` | Path to summary template | `./prompts/service/summary_template.md` |
-| | `compact_prompt` | Path to compact prompt template | `./prompts/service/compact_prompt.md` |
 | | `system_intro` | Path to system prompt intro section | `./prompts/system/intro.md` |
 | | `system_rules` | Path to system rules section | `./prompts/system/system_rules.md` |
 | | `system_doing_tasks` | Path to task execution guidelines | `./prompts/system/doing_tasks.md` |
@@ -219,6 +221,10 @@ AGImyCLI/
 | | `cron_tasks` | List of cron task definitions | `[]` |
 | `skills` | `enabled` | Enable the skill system | `true` |
 | | `dirs` | Directories to scan for SKILL.md files (relative to project root) | `["skills"]` |
+| `persistent_memory` | `enabled` | Enable cross-session persistent memory | `true` |
+| | `global_dir` | Global memory directory path (empty = disabled) | `""` |
+| | `max_index_chars` | Max characters to inject from MEMORY.md into context | `4000` |
+| | `types` | Allowed memory types | `["user", "feedback", "project", "reference"]` |
 
 #### Cron Task Format
 
@@ -261,7 +267,6 @@ Service and recovery prompts:
 | `token_budget_nudge` | Warning injected at high context usage (supports `{pct:.0%}` placeholder) |
 | `summary_system` | System prompt for summary generation |
 | `summary_template` | Template for summary generation (supports `{messages}` placeholder) |
-| `compact_prompt` | Prompt template for generating compression summaries |
 
 All prompts are customizable by editing the `.md` files in the `prompts/` directory. If a path is empty or the file is missing, a built-in default string is used.
 
@@ -295,10 +300,11 @@ External tools are compiled .exe programs defined in `tools.json` and communicat
 |------|---------|-------------|
 | `read_file` | `external_tools/read_file/dist/read_file.exe` | Read file contents (text/image/PDF/notebook, offset/limit/papers support) |
 | `write_file` | `external_tools/write_file/dist/write_file.exe` | Write file contents |
-| `shell` | `external_tools/winshell/dist/winshell.exe` | Execute PowerShell commands (alias resolution, quote-aware operator conversion, .ps1 for complex scripts) |
+| `shell` | `external_tools/winshell/dist/winshell.exe` | Execute PowerShell commands (alias resolution, quote-aware operator conversion, .ps1 for complex scripts, timeout in seconds) |
 | `grep` | `external_tools/grep/dist/grep.exe` | Search file contents (regex, output modes, context, type filter, pagination) |
 | `glob` | `external_tools/glob/dist/glob.exe` | Find files by pattern (max 50 results) |
 | `edit` | `external_tools/edit/dist/edit.exe` | Precise string replacement (quote normalization, replace_all support) |
+| `memory` | Built-in | Cross-session persistent memory (save/load/list/search with global/project scopes) |
 
 Example in `tools.json`:
 ```json
@@ -354,7 +360,7 @@ Token consumption is displayed at the bottom of the screen (independent row, rig
 - `⬇`: Download tokens (reasoning)
 - `∫`: Cumulative total
 
-Token calculation rules:
+Token calculation rules (results are rounded to integers):
 - Chinese characters: 1.3 token/char
 - English words: 1.1 token/word
 - Punctuation, digits, other: 1.0 token/char
@@ -390,6 +396,8 @@ Type `/` followed by a command name to execute it. Press Tab for completion. Com
 | `/save` | Save current session |
 | `/load [id]` | Load a saved session |
 | `/memory [count]` | Show recent memory |
+| `/remember [name]` | Show persistent memories list or details |
+| `/forget <name>` | Delete a persistent memory |
 | `/compact` | Manually trigger context compression |
 | `/mcp` | Show MCP server status |
 | `/tools` | List available tools (configured + built-in) |

@@ -1,5 +1,6 @@
 """Memory management for conversation history and summarization"""
 
+import copy
 import json
 import logging
 import threading
@@ -71,7 +72,7 @@ class Memory:
             logger.info(f"Saved session {self._session_id} to {filename} ({len(self._history)} messages)")
             return str(filepath)
         except Exception as e:
-            logger.error(f"Failed to save session (session_id={self._session_id}): {e}")
+            logger.error(f"Failed to save session (session_id={self._session_id}): {e}", exc_info=True)
             return ""
 
     def load_session(self, session_path: str) -> bool:
@@ -93,7 +94,7 @@ class Memory:
             logger.info(f"Loaded session {self._session_id} ({len(self._history)} messages)")
             return True
         except Exception as e:
-            logger.error(f"Failed to load session (path={session_path}): {e}")
+            logger.error(f"Failed to load session (path={session_path}): {e}", exc_info=True)
             return False
 
     def list_sessions(self) -> List[Dict[str, str]]:
@@ -150,15 +151,29 @@ class Memory:
             self._history.append(message)
         logger.debug(f"Added {role} message, session has {len(self._history)} messages")
 
+    def load_session_by_index(self, idx: int) -> bool:
+        """Load a session by its index in list_sessions() result.
+
+        Args:
+            idx: 0-based index from list_sessions()
+        Returns:
+            True if loaded successfully
+        """
+        sessions = self.list_sessions()
+        if 0 <= idx < len(sessions):
+            filepath = self._history_dir / sessions[idx]["filename"]
+            return self.load_session(str(filepath))
+        return False
+
     def get_messages(self) -> List[Dict[str, Any]]:
-        """Get current session conversation history"""
+        """Get current session conversation history (deep copy to prevent mutation)"""
         with self._rw_lock:
-            return list(self._history)
+            return copy.deepcopy(self._history)
 
     def get_context(self, max_messages: int = 20) -> List[Dict[str, Any]]:
-        """Get recent messages from current session"""
+        """Get recent messages from current session (deep copy to prevent mutation)"""
         with self._rw_lock:
-            return self._history[-max_messages:] if self._history else []
+            return copy.deepcopy(self._history[-max_messages:]) if self._history else []
 
     def clear(self) -> None:
         """Clear current session memory only"""
@@ -232,24 +247,33 @@ class CompactEngine:
     """
 
     LEVEL_MICRO = 1
-    LEVEL_AUTO = 2
-    LEVEL_FULL = 3
+    LEVEL_COLLAPSE = 2
+    LEVEL_AUTO = 3
+    LEVEL_FULL = 4
 
     def __init__(self, memory: "Memory"):
         logger.debug("CompactEngine initialized")
         self._memory = memory
         self._tool_call_streak = 0
         self._last_user_message_time: Optional[datetime] = None
+        self._compact_lock = threading.Lock()
+        # 电路断路器状态
+        self._consecutive_compact_failures = 0
+        self._compact_circuit_open = False
+        self._in_compact = threading.local()
+        self.MAX_CONSECUTIVE_COMPACT_FAILURES = 3
 
     def increment_streak(self) -> None:
-        """增加工具调用连续计数"""
-        self._tool_call_streak += 1
-        logger.debug(f"Tool call streak: {self._tool_call_streak}")
+        """增加工具调用连续计数（线程安全）"""
+        with self._compact_lock:
+            self._tool_call_streak += 1
+            logger.debug(f"Tool call streak: {self._tool_call_streak}")
 
     def record_user_message(self) -> None:
-        """记录用户消息，用于时间触发检测"""
-        self._last_user_message_time = datetime.now()
-        self._tool_call_streak = 0
+        """记录用户消息，用于时间触发检测（线程安全）"""
+        with self._compact_lock:
+            self._last_user_message_time = datetime.now()
+            self._tool_call_streak = 0
 
     def should_compact(self, current_tokens: int, context_window: int) -> tuple:
         """
@@ -261,7 +285,21 @@ class CompactEngine:
         if not config.compact_enabled:
             return False, 0
 
+        # 递归保护：压缩进行中不触发新的压缩
+        if getattr(self._in_compact, "active", False):
+            return False, 0
+
+        # 电路断路器：连续失败超过阈值则跳过
+        if self._compact_circuit_open:
+            logger.warning("Compact circuit breaker open, skipping")
+            return False, 0
+
         usage_ratio = current_tokens / context_window if context_window > 0 else 0
+
+        # Context Collapse: 使用率 >= collapse_threshold 且低于 auto_threshold
+        if usage_ratio >= config.compact_collapse_threshold and usage_ratio < config.compact_auto_threshold:
+            logger.debug(f"should_compact: COLLAPSE, ratio={usage_ratio:.2f}")
+            return True, self.LEVEL_COLLAPSE
 
         # Full Compact: 使用率 >= 95%
         if usage_ratio >= config.compact_full_threshold:
@@ -271,6 +309,12 @@ class CompactEngine:
         # Auto Compact: 使用率 >= 85%
         if usage_ratio >= config.compact_auto_threshold:
             logger.info(f"should_compact: AUTO, ratio={usage_ratio:.2f}")
+            return True, self.LEVEL_AUTO
+
+        # Buffer check: 剩余空间不足 buffer_tokens 时触发 Auto Compact
+        remaining = context_window - current_tokens
+        if remaining < config.compact_buffer_tokens:
+            logger.info(f"should_compact: AUTO (buffer), remaining={remaining} < {config.compact_buffer_tokens}")
             return True, self.LEVEL_AUTO
 
         # Micro Compact: 连续工具调用 >= 阈值
@@ -292,7 +336,7 @@ class CompactEngine:
         执行压缩
 
         Args:
-            level: 压缩级别 (1=Micro, 2=Auto, 3=Full)
+            level: 压缩级别 (1=Micro, 2=Collapse, 3=Auto, 4=Full)
             llm_client: LLM 客户端（Auto/Full 级别需要）
 
         Returns:
@@ -305,26 +349,58 @@ class CompactEngine:
             "messages_removed": 0
         }
 
-        if level == self.LEVEL_MICRO:
-            micro_result = self._micro_compact()
-            result.update(micro_result)
-        elif level == self.LEVEL_AUTO:
-            if llm_client is None:
-                logger.warning("Auto compact requires LLM client")
+        with self._compact_lock:
+            self._in_compact.active = True
+
+        try:
+            if level == self.LEVEL_MICRO:
+                with self._compact_lock:
+                    micro_result = self._micro_compact()
+                    result.update(micro_result)
+            elif level == self.LEVEL_COLLAPSE:
+                with self._compact_lock:
+                    collapse_result = self._context_collapse()
+                    result.update(collapse_result)
+            elif level == self.LEVEL_AUTO:
+                if llm_client is None:
+                    logger.warning("Auto compact requires LLM client")
+                    return result
+                # LLM 调用在 _compact_lock 外进行，不阻塞 increment_streak()
+                auto_result = self._auto_compact(llm_client)
+                with self._compact_lock:
+                    result.update(auto_result)
+            elif level == self.LEVEL_FULL:
+                if llm_client is None:
+                    logger.warning("Full compact requires LLM client")
+                    return result
+                full_result = self._full_compact(llm_client)
+                with self._compact_lock:
+                    result.update(full_result)
+            else:
+                logger.warning(f"Unknown compact level: {level}")
                 return result
-            auto_result = self._auto_compact(llm_client)
-            result.update(auto_result)
-        elif level == self.LEVEL_FULL:
-            if llm_client is None:
-                logger.warning("Full compact requires LLM client")
-                return result
-            full_result = self._full_compact(llm_client)
-            result.update(full_result)
+        finally:
+            with self._compact_lock:
+                self._in_compact.active = False
 
         if result["compacted"]:
+            # 成功：重置失败计数
+            self._consecutive_compact_failures = 0
+            self._compact_circuit_open = False
+            # 压缩后状态清理
+            self._post_compact_cleanup()
             logger.info(f"Compact done: level={result['level']}, "
                         f"removed={result['messages_removed']}, "
                         f"saved={result['tokens_saved']} tokens")
+        else:
+            # 失败：递增失败计数，触发电路断路器
+            self._consecutive_compact_failures += 1
+            if self._consecutive_compact_failures >= self.MAX_CONSECUTIVE_COMPACT_FAILURES:
+                self._compact_circuit_open = True
+                logger.error(
+                    f"Compact circuit breaker opened after "
+                    f"{self._consecutive_compact_failures} consecutive failures"
+                )
         return result
 
     def _micro_compact(self) -> Dict[str, Any]:
@@ -369,45 +445,46 @@ class CompactEngine:
         """
         自动压缩：使用 LLM 生成摘要
 
-        1. 找到/创建 compact boundary
-        2. 调用 LLM 生成摘要
-        3. 保留 boundary 之后的消息
-        4. 插入摘要
+        1. 在锁内获取 history 快照
+        2. 调用 LLM 生成摘要（锁外）
+        3. 在锁内重建 history
         """
         from .utils.token_counter import count_tokens
 
-        # 统计当前状态
-        original_count = len(self._memory._history)
+        # 在锁内获取 history 快照，确保后续操作基于一致的数据
+        with self._memory._rw_lock:
+            history_snapshot = list(self._memory._history)
+
+        original_count = len(history_snapshot)
         original_tokens = sum(
             count_tokens(m.get("content", "") or "")
-            for m in self._memory._history
+            for m in history_snapshot
         )
         logger.debug(f"[compact] Auto compact start: {original_count} messages, {original_tokens} tokens")
 
-        # 查找或创建 boundary
+        # 查找 boundary
         boundary_idx = None
-        for i, msg in enumerate(self._memory._history):
+        for i, msg in enumerate(history_snapshot):
             if is_compact_boundary(msg):
                 boundary_idx = i
                 logger.debug(f"[compact] Existing boundary found at index {i}")
                 break
 
-        # 确定保留消息的起始位置
+        # 确定保留消息
         preserve_count = config.compact_preserve_messages
         if boundary_idx is not None:
-            start_idx = boundary_idx + 1
-            preserved = self._memory._history[start_idx:]
+            preserved = history_snapshot[boundary_idx + 1:]
         else:
-            preserved = self._memory._history[-preserve_count:] if self._memory._history else []
+            preserved = history_snapshot[-preserve_count:] if history_snapshot else []
         logger.debug(f"[compact] Preserving {len(preserved)} messages after boundary")
 
-        # 生成摘要
-        summary = self._generate_summary(self._memory._history, boundary_idx, llm_client)
+        # 生成摘要（锁外，不阻塞并发读取）
+        summary = self._generate_summary(history_snapshot, boundary_idx, llm_client)
 
         # 重建 history（加锁防止并发读取看到半成品）
         with self._memory._rw_lock:
             if boundary_idx is not None:
-                self._memory._history = self._memory._history[:boundary_idx + 1]
+                self._memory._history = history_snapshot[:boundary_idx + 1]
             else:
                 self._memory._history = []
 
@@ -423,19 +500,21 @@ class CompactEngine:
                 "timestamp": datetime.now().isoformat()
             })
 
-            # 保留最近的 preserved 消息 (already sliced to preserve_count above)
+            # 保留最近的 preserved 消息
             self._memory._history.extend(preserved)
 
-        tokens_saved = original_tokens - sum(
-            count_tokens(m.get("content", "") or "")
-            for m in self._memory._history
-        )
+            # 在锁内计算 token 节省量
+            new_tokens = sum(
+                count_tokens(m.get("content", "") or "")
+                for m in self._memory._history
+            )
+            tokens_saved = original_tokens - new_tokens
 
-        logger.info(f"Auto compact: {original_count} -> {len(self._memory._history)} messages")
+        logger.info(f"Auto compact: {original_count} -> {len(self._memory._history)} messages, saved ~{int(tokens_saved)} tokens")
         return {
             "compacted": True,
             "tokens_saved": int(tokens_saved),
-            "messages_removed": original_count - len(self._memory._history)
+            "messages_removed": max(original_count - len(self._memory._history), 0)
         }
 
     def _full_compact(self, llm_client) -> Dict[str, Any]:
@@ -449,17 +528,20 @@ class CompactEngine:
         # 保存当前会话
         self._memory.save_current_session()
 
-        # 统计
-        original_count = len(self._memory._history)
+        # 在锁内获取 history 快照，确保后续操作基于一致的数据
         from .utils.token_counter import count_tokens
+        with self._memory._rw_lock:
+            history_snapshot = list(self._memory._history)
+
+        original_count = len(history_snapshot)
         original_tokens = sum(
             count_tokens(m.get("content", "") or "")
-            for m in self._memory._history
+            for m in history_snapshot
         )
         logger.debug(f"[compact] Full compact start: {original_count} messages, {original_tokens} tokens")
 
         # 创建新的 boundary（带完整摘要）
-        summary = self._generate_summary(self._memory._history, None, llm_client)
+        summary = self._generate_summary(history_snapshot, None, llm_client)
         boundary = create_compact_boundary(original_count, int(original_tokens), summary)
 
         # 清空并重建（加锁防止并发读取看到半成品）
@@ -470,16 +552,17 @@ class CompactEngine:
                 "content": f"[对话摘要]\n{summary}",
                 "timestamp": datetime.now().isoformat()
             })
+            # 在锁内计算 token 节省量
+            new_tokens = sum(
+                count_tokens(m.get("content", "") or "")
+                for m in self._memory._history
+            )
 
-        logger.info(f"[compact] Full compact complete: saved session, boundary created, history cleared")
-        new_tokens = sum(
-            count_tokens(m.get("content", "") or "")
-            for m in self._memory._history
-        )
+        logger.info(f"[compact] Full compact complete: saved session, boundary created, history cleared, saved ~{max(int(original_tokens - new_tokens), 0)} tokens")
         return {
             "compacted": True,
             "tokens_saved": max(int(original_tokens - new_tokens), 0),
-            "messages_removed": original_count - 2  # boundary + summary
+            "messages_removed": max(original_count - 2, 0)  # boundary + summary
         }
 
     def _generate_summary(self, messages: List[Dict[str, Any]], boundary_idx: Optional[int], llm_client) -> str:
@@ -492,6 +575,9 @@ class CompactEngine:
         else:
             msg_range = messages
         logger.debug(f"[compact] Generating summary for {len(msg_range)} messages")
+
+        if not msg_range:
+            return "[无消息可摘要]"
 
         # 构建摘要请求
         msg_texts = []
@@ -521,8 +607,124 @@ class CompactEngine:
             logger.debug(f"[compact] LLM summary generated: {len(summary_text)} chars")
             return summary_text
         except Exception as e:
-            logger.error(f"Summary generation failed: {e}")
+            logger.error(f"Summary generation failed: {e}", exc_info=True)
             return f"[摘要生成失败: {str(e)[:100]}]"
+
+    def _post_compact_cleanup(self) -> None:
+        """压缩后状态清理：重置计数器，避免重复压缩"""
+        self._tool_call_streak = 0
+        self._last_user_message_time = datetime.now()
+        logger.debug("Post-compact cleanup: reset streak and gap timer")
+
+    def _context_collapse(self) -> Dict[str, Any]:
+        """上下文折叠：零成本的消息序列合并。
+
+        扫描相邻 user+assistant 轮次（不含 tool 消息），
+        折叠为简短的摘要系统消息。
+        """
+        MIN_SEQUENCE = 4
+        collapsed = 0
+        collapsed_tokens = 0
+
+        from .utils.token_counter import count_tokens
+
+        with self._memory._rw_lock:
+            history = self._memory._history
+            if len(history) < MIN_SEQUENCE:
+                logger.debug(f"Context collapse skipped: history too short ({len(history)} < {MIN_SEQUENCE})")
+                return {"compacted": False, "tokens_saved": 0, "messages_removed": 0}
+
+            # 扫描可折叠序列：找连续的 user + assistant 轮次
+            # 跳过 system 消息、compact boundary、已折叠消息
+            sequences = []
+            start = None
+            for i, m in enumerate(history):
+                role = m.get("role")
+                # Skip system messages and special messages
+                if role == "system":
+                    start = None
+                    continue
+                # Track user messages as potential sequence start
+                if role == "user":
+                    # Check if this is a project context / compact resume injection
+                    content = m.get("content", "")
+                    if any(kw in content for kw in ("<system-reminder>",
+                        "[Tool result:", "[工具结果已清理", "[对话摘要]",
+                        "Context at", "Keep working")):
+                        start = None
+                        continue
+                    if start is None:
+                        start = i
+                    continue
+                # Only count assistant messages with tool calls as part of sequence
+                if role == "assistant" and start is not None:
+                    if m.get("tool_calls"):
+                        # This is a tool-calling turn — reset sequence
+                        if i - start >= MIN_SEQUENCE:
+                            # Count non-system, non-tool messages in this range
+                            msgs = history[start:i]
+                            non_system = [m2 for m2 in msgs
+                                          if m2.get("role") != "system"]
+                            if len(non_system) >= MIN_SEQUENCE:
+                                tokens = sum(count_tokens(m2.get("content", "") or "")
+                                             for m2 in msgs)
+                                tools_used = set()
+                                for m2 in history[i:min(i + 5, len(history))]:
+                                    for tc in m2.get("tool_calls", []):
+                                        tools_used.add(tc.get("function", {}).get("name", ""))
+                                sequences.append({
+                                    "start": start, "end": i,
+                                    "rounds": len(non_system) // 2,
+                                    "tokens": tokens,
+                                    "tools": sorted(tools_used)[:5]
+                                })
+                        start = None
+                    continue
+                # Non-user, non-assistant — reset
+                start = None
+
+            # 处理尾部纯问答序列（对话末尾无 tool-calling assistant 打断的情况）
+            if start is not None and len(history) - start >= MIN_SEQUENCE:
+                msgs = history[start:]
+                non_system = [m2 for m2 in msgs if m2.get("role") != "system"]
+                if len(non_system) >= MIN_SEQUENCE:
+                    tokens = sum(count_tokens(m2.get("content", "") or "") for m2 in msgs)
+                    sequences.append({
+                        "start": start, "end": len(history),
+                        "rounds": len(non_system) // 2,
+                        "tokens": tokens,
+                        "tools": []
+                    })
+
+            # 从后往前折叠（避免索引失效）
+            for seq in reversed(sequences):
+                start_idx = seq["start"]
+                end_idx = seq["end"]
+                rounds = seq["rounds"]
+                tools = seq["tools"]
+                tools_str = f", tools: {', '.join(tools)}" if tools else ""
+                summary = (
+                    f"[此前: {rounds} 轮对话{tools_str}]"
+                )
+                history[start_idx:end_idx] = [{
+                    "role": "system",
+                    "content": summary,
+                    "_collapsed": True,
+                    "timestamp": datetime.now().isoformat()
+                }]
+                collapsed += (end_idx - start_idx - 1)
+                collapsed_tokens += seq["tokens"]
+
+        if collapsed > 0:
+            logger.info(f"Context collapse: removed {collapsed} msgs, "
+                        f"saved ~{int(collapsed_tokens)} tokens")
+        else:
+            logger.debug("Context collapse: no collapsible sequences found")
+        return {
+            "compacted": collapsed > 0,
+            "tokens_saved": int(collapsed_tokens),
+            "messages_removed": collapsed
+        }
 
 
 # Global memory instance

@@ -43,7 +43,8 @@ class MCPManager:
             try:
                 client = create_mcp_client(server_config)
                 if client.connect():
-                    self._clients[server_name] = client
+                    with self._lock:
+                        self._clients[server_name] = client
                     # Get and register tools
                     tools = client.get_all_tool_definitions()
                     self._index.register(server_name, client, tools)
@@ -69,22 +70,11 @@ class MCPManager:
                     "message": str(e)
                 })
 
-        self._connected = success_count > 0
+        with self._lock:
+            self._connected = success_count > 0
         total = len(self.server_configs)
         logger.info(f"MCP connect_all: {success_count}/{total} servers connected")
         return self._connected
-
-    def disconnect_all(self) -> None:
-        """Disconnect all MCP clients"""
-        for server_name, client in self._clients.items():
-            try:
-                client.disconnect()
-                logger.info(f"Disconnected from MCP server: {server_name}")
-            except Exception as e:
-                logger.warning(f"Error disconnecting {server_name}: {e}")
-        self._clients.clear()
-        self._index.clear()
-        self._connected = False
 
     def get_client(self, name: str) -> Optional[BaseMCPClient]:
         """Get a connected client by server name"""
