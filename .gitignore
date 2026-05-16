@@ -1,6 +1,7 @@
-logs/
-memory/
-mcpdata/
+# Root-level runtime data (leading / restricts to repo root only)
+/logs/
+/memory/
+/mcpdata/
 __pycache__/
 *.pyc
 .env
