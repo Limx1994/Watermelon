@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "server-name": {
+      "enabled": true,
+      "type": "stdio",
+      "command": "mcp-server-xxx",
+      "args": [],
+      "env": {
+        "API_KEY": "your-api-key-here"
+      }
+    }
+  }
+}
