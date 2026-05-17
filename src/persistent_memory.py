@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from src.utils.path import get_project_root
+from .utils.path import get_project_root
 
 logger = logging.getLogger(__name__)
 
@@ -98,11 +98,16 @@ class PersistentMemory:
     def _initialize(self) -> None:
         if self._initialized:
             return
-        from src.core.config import config
-        self._project_dir = get_project_root() / "data" / "memory"
+        from .config import config
+        self._project_dir = get_project_root() / "memory"
         global_dir_str = config.persistent_memory_global_dir
         if global_dir_str:
-            self._global_dir = Path(global_dir_str).expanduser().resolve()
+            # 相对路径基于项目根目录解析
+            gpath = Path(global_dir_str)
+            if not gpath.is_absolute():
+                self._global_dir = (get_project_root() / gpath).resolve()
+            else:
+                self._global_dir = gpath.expanduser().resolve()
         else:
             self._global_dir = None
         self._rw_lock = threading.RLock()
@@ -146,10 +151,11 @@ class PersistentMemory:
         try:
             text = filepath.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as e:
-            logger.warning(f"Failed to read memory file {filepath}: {e}")
+            logger.error(f"Failed to read memory file {filepath}: {e}")
             return None
         meta = _parse_frontmatter(text)
         if not meta:
+            logger.warning(f"Invalid frontmatter in memory file: {filepath}")
             return None
         return {
             "name": meta.get("name", filepath.stem),
@@ -222,7 +228,7 @@ class PersistentMemory:
         if scope not in _VALID_SCOPES:
             logger.warning(f"Invalid scope: {scope}")
             return False
-        from src.core.config import config
+        from .config import config
         valid_types = set(config.persistent_memory_types)
         if mem_type not in valid_types:
             logger.warning(f"Invalid memory type: {mem_type}")

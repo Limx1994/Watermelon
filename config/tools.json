@@ -30,7 +30,7 @@
             "path"
           ]
         },
-        "command": "src/tools/implementations/read_file/dist/read_file.exe"
+        "command": "external_tools/read_file/dist/read_file.exe"
       }
     },
     {
@@ -55,7 +55,7 @@
             "content"
           ]
         },
-        "command": "src/tools/implementations/write_file/dist/write_file.exe"
+        "command": "external_tools/write_file/dist/write_file.exe"
       }
     },
     {
@@ -96,7 +96,7 @@
             "command"
           ]
         },
-        "command": "src/tools/implementations/winshell/dist/winshell.exe"
+        "command": "external_tools/winshell/dist/winshell.exe"
       }
     },
     {
@@ -104,7 +104,7 @@
       "function": {
         "name": "grep",
         "description": "搜索文件内容中的文本模式。",
-        "command": "src/tools/implementations/grep/dist/grep.exe",
+        "command": "external_tools/grep/dist/grep.exe",
         "parameters": {
           "type": "object",
           "properties": {
@@ -190,7 +190,7 @@
       "function": {
         "name": "glob",
         "description": "根据文件名模式查找文件。",
-        "command": "src/tools/implementations/glob/dist/glob.exe",
+        "command": "external_tools/glob/dist/glob.exe",
         "parameters": {
           "type": "object",
           "properties": {
@@ -214,7 +214,7 @@
       "function": {
         "name": "edit",
         "description": "精确替换文件中的字符串。需先 Read 文件才能编辑。",
-        "command": "src/tools/implementations/edit/dist/edit.exe",
+        "command": "external_tools/edit/dist/edit.exe",
         "parameters": {
           "type": "object",
           "properties": {

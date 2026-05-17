@@ -1,1 +1,1 @@
-"""AGImyCLI - TUI AGI Interaction Tool"""
+"""Watermelon - TUI AGI Interaction Tool"""

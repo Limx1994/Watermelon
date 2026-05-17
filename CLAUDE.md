@@ -13,61 +13,26 @@ Python-based TUI AGI interaction tool inspired by Claude Code.
 
 ```
 src/
-├── __init__.py            # Package init
-├── __main__.py            # Entry: python -m src
-├── core/
-│   ├── agent.py           # Agent loop (concurrent tools, stop hooks)
-│   ├── config.py          # Config singleton
-│   ├── main.py            # Main entry point
-│   └── tui.py             # TUI (SimpleTUI, BufferControl + OutputLexer)
-├── llm/
-│   └── client.py          # LLM client (streaming, model switching, interruptible sleep)
-├── tools/
-│   ├── base.py            # BaseTool, ToolResult
-│   ├── registry.py        # Tool registry (singleton)
-│   ├── loader.py          # External tool loader
-│   ├── external.py        # External CLI tool executor
-│   ├── sleep.py           # Sleep tool (autonomous idle)
-│   ├── memory_tool.py     # Persistent memory tool (LLM-invokable)
-│   └── implementations/   # Compiled .exe tools
-│       ├── read_file/     # File reader
-│       ├── write_file/    # File writer
-│       ├── winshell/      # Shell executor (alias resolution)
-│       ├── grep/          # Content search
-│       ├── glob/          # File pattern matching
-│       └── edit/          # String replacement
-├── commands/              # registry.py, core.py, completer.py, utils.py
-├── skills/
-│   ├── definition.py      # SkillDefinition dataclass
-│   ├── loader.py          # SKILL.md parser and loader
-│   ├── registry.py        # SkillRegistry singleton
-│   ├── commands.py        # Skill execution handler + /skills command
-│   ├── tool.py            # SkillTool (LLM-invokable)
-│   └── definitions/       # SKILL.md files
-│       └── code-review/   # Example: code review skill
-├── cron/
-│   └── scheduler.py       # CronScheduler
-├── memory/
-│   ├── memory.py          # Memory + CompactEngine
-│   └── persistent_memory.py # PersistentMemory (cross-session)
-├── mcp/                   # protocol.py, manager.py, base.py, client.py, http_client.py, stdio_client.py, index.py, persistence.py
-├── prompts/
-│   ├── system/            # System prompt sections (6 files)
-│   ├── service/           # Service prompts
-│   ├── recovery/          # Recovery prompts
-│   └── autonomous/        # Autonomous mode instructions
-└── utils/                 # path.py, token_counter.py, logging.py, tool_result_persistence.py
-data/                      # Runtime data (gitignored)
-├── logs/                  # Log files
-├── memory/                # Session history and persistent memory files
-└── mcpdata/               # MCP persistence data
-config/                    # Configuration files
-├── config.json            # App configuration (gitignored, use config.json.example)
-├── mcp.json               # MCP server configuration (gitignored, use mcp.json.example)
-├── tools.json             # Tool definitions
-└── scheduled_tasks.json   # Cron task state (auto-generated)
-config.json.example        # Configuration template
-requirements.txt           # Python dependencies
+├── main.py              # Entry point
+├── tui.py               # TUI (SimpleTUI, BufferControl + OutputLexer)
+├── agent.py             # Agent loop (concurrent tools, stop hooks)
+├── config.py            # Config singleton
+├── memory.py            # Memory + CompactEngine
+├── persistent_memory.py # PersistentMemory (cross-session file-based memory)
+├── llm/client.py        # LLM client (streaming, model switching, interruptible sleep)
+├── tools/               # base.py, registry.py, loader.py, external.py, sleep.py, memory_tool.py
+├── commands/            # registry.py, core.py, completer.py, utils.py
+├── skills/              # definition.py, loader.py, registry.py, commands.py, tool.py
+├── cron/scheduler.py    # CronScheduler
+├── mcp/                 # protocol.py, manager.py, base.py, client.py, http_client.py, stdio_client.py, index.py, persistence.py
+└── utils/               # path.py, token_counter.py, logging.py
+external_tools/          # Compiled .exe tools (read_file, write_file, shell, grep, glob, edit)
+skills/                  # SKILL.md definitions
+prompts/                 # Prompt templates (.md) — system/, service/, recovery/, autonomous/
+config/                  # mcp.json, tools.json
+config.json              # App configuration
+README_zh.md             # Readme (Chinese)
+LICENSE                  # License file
 ```
 
 ## Environment
@@ -130,13 +95,11 @@ All settings in `config.json`:
 | | `context_too_long` | `./prompts/recovery/context_too_long.md` | Context overflow recovery |
 | | `token_budget_nudge` | `./prompts/recovery/token_budget_nudge.md` | Token budget warning |
 
-Note: Prompt files have been moved to `src/prompts/`. All paths in `config/config.json` must use `./src/prompts/...` format (as shown in `config.json.example`).
-
 MCP config in `config/mcp.json`: `{"mcpServers": {"name": {"type": "stdio|http", "command": "...", "args": []}}}`
 
 ## Tool System
 
-### External Tools (src/tools/implementations/)
+### External Tools (external_tools/)
 
 | Tool | Description |
 |------|-------------|
@@ -248,5 +211,5 @@ Shortcuts: `Enter` send, `Ctrl+J` newline, `Up/Down` history, `PageUp/PageDown` 
 
 ```bash
 pip install -r requirements.txt
-python -m src
+python -m src.main
 ```

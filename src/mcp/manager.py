@@ -96,6 +96,7 @@ class MCPManager:
             }
 
         if not isinstance(arguments, dict):
+            logger.warning(f"MCP call_tool: invalid arguments type for {tool_name}: {type(arguments).__name__}")
             return {
                 "success": False,
                 "content": "",

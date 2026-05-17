@@ -1,6 +1,7 @@
 """Path utility functions for relative path handling"""
 
 import logging
+import sys
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -12,8 +13,11 @@ def get_project_root() -> Path:
     """Get the project root directory (where config.json is located)"""
     global _PROJECT_ROOT
     if _PROJECT_ROOT is None:
-        # Start from this file's location and traverse up
-        current = Path(__file__).resolve().parent
+        # PyInstaller frozen exe: use exe directory, not temp extract dir
+        if getattr(sys, 'frozen', False):
+            current = Path(sys.executable).resolve().parent
+        else:
+            current = Path(__file__).resolve().parent
         # Traverse up to find project root (contains config.json)
         while current != current.parent:
             if (current / "config.json").exists():

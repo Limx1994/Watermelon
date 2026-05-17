@@ -141,13 +141,22 @@ class CronScheduler:
         self._save_state()
 
     def check_network(self) -> bool:
-        """检测网络连接状态"""
+        """检测网络连接状态（多端点容错）"""
         try:
             import urllib.request
-            # 使用更可靠的检测端点，减少超时时间
-            urllib.request.urlopen("https://httpbin.org/get", timeout=3)
-            logger.debug("Network check: ok")
-            return True
+            endpoints = [
+                ("https://www.baidu.com", 3),
+                ("https://httpbin.org/get", 3),
+            ]
+            for url, timeout in endpoints:
+                try:
+                    urllib.request.urlopen(url, timeout=timeout)
+                    logger.debug(f"Network check: ok ({url})")
+                    return True
+                except Exception:
+                    continue
+            logger.debug("Network check: all endpoints failed")
+            return False
         except Exception:
             logger.debug("Network check: failed")
             return False
@@ -189,7 +198,7 @@ class CronScheduler:
 
             # Tick mechanism: wake up agent periodically
             tick_elapsed = (now - self._last_tick).total_seconds() / 60
-            if tick_elapsed >= self._tick_interval + self._tick_jitter:
+            if tick_elapsed >= self._tick_interval - self._tick_jitter:
                 if not self._agent._is_sleeping:
                     logger.info("Tick firing")
                     try:

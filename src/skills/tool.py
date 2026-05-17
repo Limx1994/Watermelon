@@ -27,6 +27,7 @@ class SkillTool(BaseTool):
 
         skill = skill_registry.get(skill_name)
         if not skill:
+            logger.warning(f"Skill not found: {skill_name}")
             available = [s.name for s in skill_registry.list_skills()]
             return ToolResult(
                 success=False,

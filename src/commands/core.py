@@ -10,7 +10,7 @@ from .utils import output as _output
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from ..core.tui import SimpleTUI
+    from ..tui import SimpleTUI
 
 # 角色映射常量
 _ROLE_MAP = {"user": "用户", "assistant": "助手", "system": "系统", "tool": "工具"}
@@ -41,19 +41,75 @@ def cmd_help(tui: "SimpleTUI", args: str) -> None:
 # ── /clear ─────────────────────────────────────────────────
 
 def cmd_clear(tui: "SimpleTUI", args: str) -> None:
-    from ..memory.memory import memory
+    """清除屏幕、对话记忆和所有会话状态。
+
+    无论 Agent 是否运行均可执行。
+    保留: 输入历史、MCP 连接、持久化记忆。
+    """
+    from ..memory import memory
+    import queue as _queue
+    logger.info("Command: /clear")
+
+    # ── 1. 停止正在运行的 Agent ──────────────────────────
+    agent_was_running = tui._agent_running
+    if agent_was_running:
+        tui._agent_stop_event.set()
+        tui._agent_running = False
+        tui._exit_requested = False
+        logger.info("Agent 停止信号已发送 (/clear)")
+
+    # ── 2. 保存旧会话 ID（memory.clear() 会重新生成）────
+    old_session_id = memory._session_id
+
+    # ── 3. 重置 TUI 显示状态 ─────────────────────────────
+    tui._token_text = ""
+    tui._context_usage_ratio = 0.0
+    tui._compact_indicator = ""
+
+    # ── 4. 清除屏幕输出 ─────────────────────────────────
     with tui._fragments_lock:
         tui._fragments.clear()
-    tui._auto_scroll = True
+
+    # ── 5. 清空输出队列（移除残留消息）──────────────────
+    drained = 0
+    while not tui._output_queue.empty():
+        try:
+            tui._output_queue.get_nowait()
+            drained += 1
+        except _queue.Empty:
+            break
+    if drained:
+        logger.debug(f"输出队列已清空: {drained} 条消息")
+
+    # ── 6. 重置 Agent 会话状态 ──────────────────────────
+    if tui.agent:
+        tui.agent.reset_session_state(old_session_id)
+
+    # ── 7. 清除对话记忆 ─────────────────────────────────
     memory.clear()
-    logger.info("Screen and memory cleared")
-    _output(tui, "\n屏幕和对话记忆已清除\n")
+
+    # ── 8. 重置滚动 ──────────────────────────────────────
+    # 不清除 _agent_stop_event：Agent 线程需要它来感知取消请求，
+    # 下次启动 Agent 时 tui._run_agent 会自动 clear()
+    tui._auto_scroll = True
+
+    # ── 9. 输出反馈 ──────────────────────────────────────
+    lines = ["\n屏幕已清除"]
+    if agent_was_running:
+        lines.append("Agent 已停止")
+    lines.append(f"会话 ID: {memory._session_id}")
+    _output(tui, "\n".join(lines) + "\n")
+
+    logger.info(
+        f"/clear 完成: agent_was_running={agent_was_running}, "
+        f"new_session={memory._session_id}, queue_drained={drained}"
+    )
 
 
 # ── /model ─────────────────────────────────────────────────
 
 def cmd_model(tui: "SimpleTUI", args: str) -> None:
-    from ..core.config import config
+    from ..config import config
     if not args.strip():
         _output(tui, f"\n当前模型: {config.model}\n")
         return
@@ -72,7 +128,7 @@ def cmd_model(tui: "SimpleTUI", args: str) -> None:
 # ── /config ────────────────────────────────────────────────
 
 def cmd_config(tui: "SimpleTUI", args: str) -> None:
-    from ..core.config import config
+    from ..config import config
     logger.debug("Command: /config")
     # 隐藏敏感信息
     display_config = config.to_dict()
@@ -90,7 +146,7 @@ def cmd_config(tui: "SimpleTUI", args: str) -> None:
 # ── /history ───────────────────────────────────────────────
 
 def cmd_history(tui: "SimpleTUI", args: str) -> None:
-    from ..memory.memory import memory
+    from ..memory import memory
     logger.debug("Command: /history")
     messages = memory.get_messages()
     if not messages:
@@ -112,7 +168,7 @@ def cmd_history(tui: "SimpleTUI", args: str) -> None:
 # ── /save ──────────────────────────────────────────────────
 
 def cmd_save(tui: "SimpleTUI", args: str) -> None:
-    from ..memory.memory import memory
+    from ..memory import memory
     logger.info("Session save requested")
     path = memory.save_current_session()
     if path:
@@ -124,7 +180,7 @@ def cmd_save(tui: "SimpleTUI", args: str) -> None:
 # ── /load ──────────────────────────────────────────────────
 
 def cmd_load(tui: "SimpleTUI", args: str) -> None:
-    from ..memory.memory import memory
+    from ..memory import memory
     logger.debug(f"Command: /load {args.strip()}")
     sessions = memory.list_sessions()
     if not sessions:
@@ -176,13 +232,14 @@ def cmd_load(tui: "SimpleTUI", args: str) -> None:
                 lines.append(f"  [{role}] {content}\n")
             _output(tui, "".join(lines))
     else:
+        logger.warning(f"Session load failed: {filepath}")
         _output(tui, f"\n加载会话失败: {filepath}\n", "class:error")
 
 
 # ── /memory ────────────────────────────────────────────────
 
 def cmd_memory(tui: "SimpleTUI", args: str) -> None:
-    from ..memory.memory import memory
+    from ..memory import memory
     logger.debug(f"Command: /memory {args.strip()}")
     count = 20
     if args.strip():
@@ -209,7 +266,7 @@ def cmd_memory(tui: "SimpleTUI", args: str) -> None:
         lines.append(f"  [{role}] {preview}\n")
     # 持久化记忆提示
     try:
-        from ..memory.persistent_memory import persistent_memory
+        from ..persistent_memory import persistent_memory
         pm_count = persistent_memory.count()
         if pm_count > 0:
             lines.append(f"\n  提示: 还有 {pm_count} 条持久化记忆，用 /remember 查看\n")
@@ -230,7 +287,7 @@ def cmd_compact(tui: "SimpleTUI", args: str) -> None:
 
     def _run():
         try:
-            from ..memory.memory import CompactEngine
+            from ..memory import CompactEngine
             # 获取 _run_lock 防止与 agent._run_inner() 并发修改 history
             with tui.agent._run_lock:
                 result = tui.agent._compact_engine.compact(
@@ -256,7 +313,7 @@ def cmd_compact(tui: "SimpleTUI", args: str) -> None:
 # ── /mcp ───────────────────────────────────────────────────
 
 def cmd_mcp(tui: "SimpleTUI", args: str) -> None:
-    from ..core.config import config
+    from ..config import config
     servers = config.mcp_servers
     if not servers:
         _output(tui, "\n未配置 MCP 服务器\n")
@@ -284,7 +341,7 @@ def cmd_mcp(tui: "SimpleTUI", args: str) -> None:
 # ── /tools ─────────────────────────────────────────────────
 
 def cmd_tools(tui: "SimpleTUI", args: str) -> None:
-    from ..core.config import config
+    from ..config import config
     from ..tools.registry import registry
     enabled = config.enabled_tools
     all_tools = registry.list_tools()
@@ -314,7 +371,7 @@ def cmd_tools(tui: "SimpleTUI", args: str) -> None:
 # ── /system ────────────────────────────────────────────────
 
 def cmd_system(tui: "SimpleTUI", args: str) -> None:
-    from ..core.config import config
+    from ..config import config
     prompt = config.get_system_prompt()
     max_len = 2000
     if len(prompt) > max_len:
@@ -325,10 +382,10 @@ def cmd_system(tui: "SimpleTUI", args: str) -> None:
 # ── /version ───────────────────────────────────────────────
 
 def cmd_version(tui: "SimpleTUI", args: str) -> None:
-    from ..core.config import config
+    from ..config import config
     lines = [
         "\n┌─────────────────────────────────────────────┐",
-        "│  AGImyCLI - TUI AGI Interaction Tool         │",
+        "│  Watermelon - TUI AGI Interaction Tool         │",
         "├─────────────────────────────────────────────┤\n",
         f"  模型:      {config.model}\n",
         f"  API:       {config.base_url}\n",
@@ -338,6 +395,117 @@ def cmd_version(tui: "SimpleTUI", args: str) -> None:
         f"  推理深度:   {config.reasoning_effort}\n",
         "└─────────────────────────────────────────────┘\n",
     ]
+    _output(tui, "".join(lines))
+
+
+# ── /status ────────────────────────────────────────────────
+
+def cmd_status(tui: "SimpleTUI", args: str) -> None:
+    """显示系统状态概览：会话、模型、Agent、上下文、工具、记忆。"""
+    from ..config import config
+    from ..memory import memory
+    logger.debug("Command: /status")
+
+    lines = []
+
+    # ── Section 1: Session ──
+    with memory._rw_lock:
+        msg_count = len(memory._history)
+    lines.append("\n┌─ 会话 ──────────────────────────────────────┐")
+    lines.append(f"│  会话 ID:     {memory._session_id}\n")
+    lines.append(f"│  消息数:       {msg_count}\n")
+    lines.append("└─────────────────────────────────────────────┘\n")
+
+    # ── Section 2: Model / API ──
+    api_key = config.api_key
+    if not api_key:
+        masked_key = "未设置"
+    elif len(api_key) > 8:
+        masked_key = api_key[:4] + "****" + api_key[-4:]
+    else:
+        masked_key = "****"
+
+    fb = config.fallback_config
+    fb_desc = fb["model"] if fb else "无"
+
+    ctx_k = config.context_window // 1000
+
+    lines.append("┌─ 模型 / API ──────────────────────────────────┐")
+    lines.append(f"│  模型:         {config.model}\n")
+    lines.append(f"│  API:          {config.base_url}\n")
+    lines.append(f"│  API 密钥:     {masked_key}\n")
+    lines.append(f"│  上下文窗口:   {ctx_k}k\n")
+    lines.append(f"│  最大输出:     {config.max_output_tokens}\n")
+    lines.append(f"│  温度:         {config.temperature}\n")
+    lines.append(f"│  Top P:        {config.top_p}\n")
+    lines.append(f"│  推理深度:     {config.reasoning_effort}\n")
+    lines.append(f"│  备用模型:     {fb_desc}\n")
+    lines.append("└─────────────────────────────────────────────┘\n")
+
+    # ── Section 3: Agent ──
+    lines.append("┌─ Agent ───────────────────────────────────────┐")
+    if tui.agent:
+        agent_state = "运行中" if tui._agent_running else "空闲"
+        auto_mode = "开启" if tui.agent._autonomous_mode else "关闭"
+        auto_run = "活跃" if tui.agent._autonomous_running else "空闲"
+        lines.append(f"│  状态:         {agent_state}\n")
+        lines.append(f"│  自主模式:     {auto_mode}\n")
+        lines.append(f"│  自主运行:     {auto_run}\n")
+    else:
+        lines.append("│  状态:         未初始化\n")
+    lines.append(f"│  最大轮次:     {config.max_turns}\n")
+    lines.append("└─────────────────────────────────────────────┘\n")
+
+    # ── Section 4: Context ──
+    lines.append("┌─ 上下文 ─────────────────────────────────────┐")
+    ratio_pct = int(tui._context_usage_ratio * 100)
+    lines.append(f"│  使用率:       {ratio_pct}%\n")
+    compact_text = tui._compact_indicator or "无"
+    lines.append(f"│  压缩状态:     {compact_text}\n")
+    lines.append(f"│  压缩启用:     {'是' if config.compact_enabled else '否'}\n")
+    lines.append("└─────────────────────────────────────────────┘\n")
+
+    # ── Section 5: Tools & MCP ──
+    lines.append("┌─ 工具 & MCP ──────────────────────────────────┐")
+    enabled = config.enabled_tools
+    if enabled:
+        lines.append(f"│  启用工具:     {len(enabled)} 个\n")
+        for tool_name in enabled:
+            lines.append(f"│    - {tool_name}\n")
+    else:
+        lines.append("│  启用工具:     无\n")
+    lines.append(f"│  技能系统:     {'启用' if config.skills_enabled else '禁用'}\n")
+    lines.append(f"│  MCP:          {'启用' if config.mcp_enabled else '禁用'}\n")
+    servers = config.mcp_servers
+    if servers and tui.agent and tui.agent.mcp_manager:
+        for s in servers:
+            srv_name = s.get("name", "?")
+            client = tui.agent.mcp_manager.get_client(srv_name)
+            connected = client and getattr(client, '_connected', False)
+            srv_status = "已连接" if connected else "未连接"
+            lines.append(f"│    {srv_name}: {srv_status}\n")
+    elif servers:
+        lines.append(f"│    {len(servers)} 个服务器 (Agent 未初始化)\n")
+    lines.append("└─────────────────────────────────────────────┘\n")
+
+    # ── Section 6: Memory ──
+    lines.append("┌─ 记忆 ───────────────────────────────────────┐")
+    lines.append(f"│  持久化记忆:   {'启用' if config.persistent_memory_enabled else '禁用'}\n")
+    try:
+        from ..persistent_memory import persistent_memory
+        pm_count = persistent_memory.count()
+    except Exception:
+        pm_count = "未知"
+    lines.append(f"│  记忆条数:     {pm_count}\n")
+    try:
+        from ..persistent_memory import persistent_memory as _pm
+        _pm._ensure_initialized()
+        gdir = str(_pm._global_dir) if _pm._global_dir else "未设置"
+    except Exception:
+        gdir = config.persistent_memory_global_dir or "未设置"
+    lines.append(f"│  全局目录:     {gdir}\n")
+    lines.append("└─────────────────────────────────────────────┘\n")
+
     _output(tui, "".join(lines))
 
 
@@ -355,7 +523,7 @@ def cmd_exit(tui: "SimpleTUI", args: str) -> None:
 # ── /remember ──────────────────────────────────────────────
 
 def cmd_remember(tui: "SimpleTUI", args: str) -> None:
-    from ..memory.persistent_memory import persistent_memory
+    from ..persistent_memory import persistent_memory
     arg = args.strip()
     logger.info(f"Command: /remember {arg}")
 
@@ -401,7 +569,7 @@ def cmd_remember(tui: "SimpleTUI", args: str) -> None:
 # ── /forget ────────────────────────────────────────────────
 
 def cmd_forget(tui: "SimpleTUI", args: str) -> None:
-    from ..memory.persistent_memory import persistent_memory
+    from ..persistent_memory import persistent_memory
     name = args.strip()
     if not name:
         _output(tui, "\n用法: /forget <记忆名称>\n", "class:error")
@@ -432,6 +600,7 @@ def register_core_commands(registry) -> None:
     registry.register("tools", "列出可用工具", cmd_tools)
     registry.register("system", "显示系统提示词", cmd_system)
     registry.register("version", "显示版本信息", cmd_version)
+    registry.register("status", "显示系统状态概览", cmd_status)
     registry.register("remember", "显示持久化记忆列表或详情", cmd_remember, arg_spec="[name]")
     registry.register("forget", "删除指定持久化记忆", cmd_forget, arg_spec="<name>")
     registry.register("exit", "退出程序", cmd_exit)

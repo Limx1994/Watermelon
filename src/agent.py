@@ -18,7 +18,7 @@ MAX_CONCURRENT_TOOLS = 10
 TRUNCATE_CONTENT_LENGTH = 20000
 
 from .config import config
-from src.llm.client import (
+from .llm.client import (
     LLMClient,
     InterruptedError,
     create_system_message,
@@ -27,12 +27,12 @@ from src.llm.client import (
     create_tool_result_message,
     is_network_error,
 )
-from src.tools.registry import registry
-from src.tools.loader import load_external_tools
-from src.mcp.manager import MCPManager
-from src.memory.memory import memory, CompactEngine
-from src.utils.token_counter import count_tokens
-from src.utils.tool_result_persistence import ToolResultPersistence
+from .tools.registry import registry
+from .tools.loader import load_external_tools
+from .mcp.manager import MCPManager
+from .memory import memory, CompactEngine
+from .utils.token_counter import count_tokens
+from .utils.tool_result_persistence import ToolResultPersistence
 
 
 class AgentCancelledError(Exception):
@@ -186,7 +186,7 @@ class Agent:
         self._first_tick = True
         self._run_lock = threading.RLock()
         self._setup_tools()
-        self.total_tokens: float = 0  # 累计token消耗
+        self.total_tokens: int = 0  # 累计token消耗
         # 上下文压缩引擎
         self._compact_engine = CompactEngine(memory)
         # 工具结果持久化
@@ -221,7 +221,7 @@ class Agent:
         registry.clear()
         logger.debug("Tool registry cleared")
         load_external_tools()
-        from src.tools.sleep import SleepTool
+        from .tools.sleep import SleepTool
         sleep_tool = SleepTool(self._sleep_event, agent=self)
         registry.register(sleep_tool)
         # Register skill tool if skills are loaded
@@ -229,7 +229,7 @@ class Agent:
         # Register persistent memory tool
         if config.persistent_memory_enabled:
             try:
-                from src.tools.memory_tool import MemoryTool
+                from .tools.memory_tool import MemoryTool
                 registry.register(MemoryTool())
                 logger.debug("MemoryTool registered")
             except Exception as e:
@@ -241,8 +241,8 @@ class Agent:
     def _try_register_skill_tool(self) -> None:
         """Register SkillTool if skills are loaded but tool not yet registered."""
         try:
-            from src.skills.tool import SkillTool
-            from src.skills.registry import skill_registry
+            from .skills.tool import SkillTool
+            from .skills.registry import skill_registry
             if skill_registry.is_loaded() and registry.get("invoke_skill") is None:
                 registry.register(SkillTool())
                 logger.info("SkillTool registered (deferred)")
@@ -295,6 +295,37 @@ class Agent:
                 logger.error(f"Stop hook error: {e}", exc_info=True)
         return None
 
+    def reset_session_state(self, old_session_id: str) -> None:
+        """重置所有会话级 agent 状态（/clear 时调用）。
+
+        必须在 memory.clear() 之前调用，因为需要 old_session_id
+        来清理工具持久化文件。
+
+        Args:
+            old_session_id: 清除前的会话 ID。
+        """
+        self.total_tokens = 0
+        self._compact_engine.reset()
+
+        if config.tool_result_persistence_enabled and old_session_id:
+            self._tool_persistence.clear_session(old_session_id)
+            logger.debug(f"工具持久化已清理: session={old_session_id}")
+
+        with self._pending_lock:
+            pending_cleared = len(self._pending_inputs)
+            self._pending_inputs.clear()
+        self._autonomous_mode = False
+        self._autonomous_running = False
+        self._is_sleeping = False
+        self._first_tick = True
+        self._allowed_tools_override = None
+
+        logger.info(
+            f"Agent session reset: tokens=0, "
+            f"pending_cleared={pending_cleared}, "
+            f"old_session={old_session_id}"
+        )
+
     def register_stop_hook(self, callback: Callable) -> None:
         """Register a callback to run after each tool round.
 
@@ -316,7 +347,7 @@ class Agent:
 
     def _build_project_context(self) -> str:
         """Build project context injection message (CLAUDE.md + date + gitStatus)."""
-        from src.utils.path import resolve_path
+        from .utils.path import resolve_path
         parts = ["<system-reminder>"]
         parts.append(f"Current date: {datetime.now().strftime('%Y-%m-%d')}")
 
@@ -335,7 +366,7 @@ class Agent:
         # Inject persistent memory index (global + project)
         if config.persistent_memory_enabled:
             try:
-                from src.memory.persistent_memory import persistent_memory
+                from .persistent_memory import persistent_memory
                 mem_idx = persistent_memory.load_index()
                 if mem_idx:
                     max_chars = config.persistent_memory_max_index_chars
@@ -365,7 +396,7 @@ class Agent:
 
         # Inject available skills listing
         try:
-            from src.skills.registry import skill_registry
+            from .skills.registry import skill_registry
             if skill_registry.is_loaded():
                 skill_lines = []
                 for s in skill_registry.list_skills():
@@ -406,10 +437,13 @@ class Agent:
     def run(self, user_input: str) -> str:
         """Run the agent with a user input. Returns the final response text."""
         with self._run_lock:
-            result = self._run_inner(user_input)
-            if not self._autonomous_mode:
-                self.start_autonomous_loop()
-            return result
+            try:
+                result = self._run_inner(user_input)
+                if not self._autonomous_mode:
+                    self.start_autonomous_loop()
+                return result
+            finally:
+                self._allowed_tools_override = None
 
     def _apply_tool_result_budget(self, messages: list) -> int:
         """Enforce per-message tool result budget. Replaces oversized results.
@@ -418,7 +452,7 @@ class Agent:
         """
         if not config.tool_result_budget_max_chars:
             return 0
-        from src.utils.token_counter import count_tokens
+        from .utils.token_counter import count_tokens
         saved = 0
         for m in messages:
             if m.get("role") != "tool":
@@ -803,8 +837,8 @@ class Agent:
         if final_response and final_response.strip():
             memory.add_message("assistant", final_response, reasoning_content=final_reasoning)
 
-        # Clear skill tools override
-        self._allowed_tools_override = None
+        # Note: _allowed_tools_override is cleared in run()'s finally block
+        # to ensure cleanup even on AgentCancelledError
 
         # Token display
         system_tokens = count_tokens(config.get_system_prompt())

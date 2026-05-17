@@ -50,12 +50,9 @@ class ExternalTool(BaseTool):
             logger.debug(f"[tool:{self.name}] exe={cmd_str}")
 
             # Build command with arguments
-            # Use executable path directly (never shlex.split it — breaks paths with spaces)
             cmd_parts = [cmd_str]
             for key, value in kwargs.items():
-                # Convert underscores to hyphens for CLI args
                 arg_name = f"--{key.replace('_', '-')}"
-                # Handle boolean flags: True = pass flag only, False = skip
                 if isinstance(value, bool):
                     if value:
                         cmd_parts.append(arg_name)
@@ -68,49 +65,64 @@ class ExternalTool(BaseTool):
             if _user_timeout is not None:
                 try:
                     _timeout_val = int(_user_timeout)
-                    # 统一以秒为单位，加 10 秒缓冲
                     _sub_timeout = max(10, _timeout_val + 10)
                 except (ValueError, TypeError):
                     _sub_timeout = 70
             else:
                 _sub_timeout = 70
-            result = subprocess.run(
-                cmd_parts,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                cwd=str(self._project_root),
-                timeout=_sub_timeout
-            )
-            elapsed = time.monotonic() - t0
-            _stdout = result.stdout or ""
-            _stderr = result.stderr or ""
-            logger.debug(f"[tool:{self.name}] exit={result.returncode} | {elapsed:.2f}s | stdout={len(_stdout)}B stderr={len(_stderr)}B")
 
-            if result.stdout:
+            proc = None
+            try:
+                creation_flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+                proc = subprocess.Popen(
+                    cmd_parts,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    cwd=str(self._project_root),
+                    creationflags=creation_flags,
+                )
+                stdout, stderr = proc.communicate(timeout=_sub_timeout)
+            except subprocess.TimeoutExpired:
+                if proc:
+                    proc.kill()
+                    proc.wait()
+                logger.warning(f"[tool:{self.name}] timed out after {_sub_timeout}s")
+                return ToolResult(
+                    success=False, content="",
+                    error=f"Tool execution timed out ({_sub_timeout}s)"
+                )
+            except KeyboardInterrupt:
+                if proc:
+                    proc.kill()
+                    proc.wait()
+                raise
+
+            elapsed = time.monotonic() - t0
+            _stdout = stdout or ""
+            _stderr = stderr or ""
+            result_code = proc.returncode
+            logger.debug(f"[tool:{self.name}] exit={result_code} | {elapsed:.2f}s | stdout={len(_stdout)}B stderr={len(_stderr)}B")
+
+            if _stdout:
                 try:
-                    data = json.loads(result.stdout)
+                    data = json.loads(_stdout)
                     success = data.get("success")
                     if success is None:
-                        # 兼容旧版输出：无 success 字段时根据 exit code 推断
-                        success = result.returncode == 0
+                        success = result_code == 0
 
-                    # 对于 winshell 类工具：检查 stderr 字段，非空则视为错误
                     stderr_content = data.get("stderr", "")
                     if stderr_content and success:
-                        # stderr 有内容但 success=true — 修正为失败
                         success = False
                         logger.warning(f"[tool:{self.name}] stderr detected | stderr={stderr_content[:300]}")
 
                     if not success:
                         logger.warning(f"[tool:{self.name}] success=false | error={data.get('error', '')[:300]} stderr={stderr_content[:300]}")
 
-                    # Extract content - for read_file, content is the primary field
-                    # but for image/pdf/notebook, data may be in other fields
                     content = data.get("content") or ""
                     if not content:
-                        # For image/pdf/notebook, serialize the relevant data
                         if 'base64' in data:
                             content = json.dumps({"type": data.get("type", "unknown"), "base64": data["base64"], "filePath": data.get("filePath", "")})
                         elif 'cells' in data:
@@ -119,17 +131,12 @@ class ExternalTool(BaseTool):
                             content = data['stdout'] or ""
 
                     content = content.replace('\r', '')
-
-                    # 错误信息优先级：error > stderr
                     error_msg = data.get("error") or (stderr_content if stderr_content else None)
 
-                    # Build metadata excluding reserved fields and nested metadata
                     metadata = {}
                     for k, v in data.items():
                         if k not in ("success", "content", "error", "metadata"):
                             metadata[k] = v
-
-                    # 确保 returnCode 在 metadata 中（对 shell 工具有用）
                     if "returnCode" in data and "returnCode" not in metadata:
                         metadata["returnCode"] = data["returnCode"]
 
@@ -142,19 +149,19 @@ class ExternalTool(BaseTool):
                         metadata=metadata
                     )
                 except json.JSONDecodeError:
-                    logger.error(f"[tool:{self.name}] invalid JSON | stdout={result.stdout[:300]}")
+                    logger.error(f"[tool:{self.name}] invalid JSON | stdout={_stdout[:300]}")
                     return ToolResult(
                         success=False,
                         content="",
-                        error=f"Invalid JSON output: {result.stdout[:200]}"
+                        error=f"Invalid JSON output: {_stdout[:200]}"
                     )
 
-            if result.stderr:
-                logger.warning(f"[tool:{self.name}] stderr={result.stderr[:500]}")
+            if _stderr:
+                logger.warning(f"[tool:{self.name}] stderr={_stderr[:500]}")
                 return ToolResult(
                     success=False,
                     content="",
-                    error=result.stderr
+                    error=_stderr
                 )
 
             logger.warning(f"[tool:{self.name}] no output")

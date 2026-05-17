@@ -1,7 +1,6 @@
-# Runtime data
-/data/logs/
-/data/memory/
-/data/mcpdata/
+logs/
+memory/
+mcpdata/
 __pycache__/
 *.pyc
 .env

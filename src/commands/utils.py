@@ -3,7 +3,7 @@
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..core.tui import SimpleTUI
+    from ..tui import SimpleTUI
 
 
 def output(tui: "SimpleTUI", text: str, style: str = "class:command") -> None:

@@ -178,11 +178,46 @@ class HttpMCPClient(BaseMCPClient):
                     self._session_id = session_id
                     logger.debug(f"MCP session established: {self._session_id}")
 
+                # Detect session expiry: 404 or 400 with session-related error
+                if response.status_code in (404, 400) and use_session:
+                    try:
+                        err_body = response.json()
+                        err_msg = str(err_body.get("error", {}).get("message", "")).lower()
+                    except (json.JSONDecodeError, AttributeError):
+                        err_msg = ""
+
+                    if any(kw in err_msg for kw in ("session", "expired")) or err_msg == "not found":
+                        logger.warning(
+                            f"MCP session expired for '{self.name}', "
+                            f"re-initializing (status={response.status_code})"
+                        )
+                        self._session_id = None
+                        self._reinitialize()
+                        # Retry the original request with new session
+                        headers = dict(self._base_headers)
+                        if self._session_id:
+                            headers["MCP-Session-Id"] = self._session_id
+                        response = self._requests.post(
+                            self.url, json=request, headers=headers, timeout=timeout
+                        )
+                        # Update session ID if new one was assigned
+                        new_sid = response.headers.get("MCP-Session-Id") or response.headers.get("mcp-session-id")
+                        if new_sid:
+                            self._session_id = new_sid
+
+                        # If retry also failed, log with recovery context
+                        if response.status_code in (404, 400):
+                            logger.warning(
+                                f"MCP post-recovery request also failed for '{self.name}' "
+                                f"(status={response.status_code})"
+                            )
+
                 response.raise_for_status()
                 try:
                     result = response.json()
                 except json.JSONDecodeError as je:
-                    logger.error(f"HTTP MCP response not JSON: status={response.status_code}, body={response.text[:200]}")
+                    content_type = response.headers.get('content-type', 'unknown')
+                    logger.error(f"HTTP MCP response not JSON: status={response.status_code}, content-type={content_type}")
                     raise Exception(f"MCP server returned non-JSON response (HTTP {response.status_code})") from je
 
                 if "error" in result:
@@ -195,7 +230,7 @@ class HttpMCPClient(BaseMCPClient):
                 # Don't retry client errors (4xx) - they won't succeed on retry
                 if hasattr(e, 'response') and e.response is not None:
                     if 400 <= e.response.status_code < 500:
-                        raise Exception(f"MCP client error {e.response.status_code}: {e}")
+                        raise Exception(f"MCP client error {e.response.status_code}")
                 wait = min(2 ** attempt, 10)
                 logger.warning(f"HTTP MCP request failed (attempt {attempt+1}/3): {e}")
                 last_error = e
@@ -228,6 +263,24 @@ class HttpMCPClient(BaseMCPClient):
         )
         self._tools = result.get("tools", [])
         logger.info(f"MCP HTTP discovered {len(self._tools)} tools for '{self.name}'")
+
+    def _reinitialize(self) -> None:
+        """Re-initialize the MCP session after session expiry."""
+        logger.info(f"MCP HTTP client '{self.name}': re-initializing session")
+        try:
+            request = MCPProtocol.create_initialize_request(
+                client_info={"name": "AGImyCLI", "version": "1.0.0"},
+                request_id=self._next_request_id()
+            )
+            self._send_request(request, timeout=10, use_session=False)
+            notification = MCPProtocol.create_initialized_notification()
+            self._send_notification(notification)
+            self._discover_tools()
+            logger.info(f"MCP HTTP client '{self.name}': session re-initialized successfully")
+        except Exception as e:
+            logger.error(f"MCP HTTP client '{self.name}': re-initialization failed: {e}")
+            self._connected = False
+            raise
 
     def _next_request_id(self) -> int:
         """Get the next monotonically increasing request ID."""

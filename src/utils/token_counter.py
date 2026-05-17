@@ -21,8 +21,9 @@ def _get_encoder():
     if _ENCODER is None:
         try:
             import tiktoken
-            _ENCODER = tiktoken.get_encoding("cl100k_base")
-        except ImportError:
+            # tiktoken >=0.12 移除了 cl100k_base，使用 o200k_base 替代
+            _ENCODER = tiktoken.get_encoding("o200k_base")
+        except (ImportError, Exception):
             _ENCODER = False
             logger.debug("tiktoken unavailable, using estimation fallback")
     return _ENCODER
@@ -32,10 +33,9 @@ def count_tokens(text: str) -> int:
     """计算文本token数
 
     优先使用 tiktoken 精确计算（如果可用），否则回退到估算规则：
-    - 中文字符：1.3 token/个
-    - 英语单词：1.1 token/个
-    - 标点符号：1 token/个
-    - 数字：1 token/个
+    - 中文字符：2.0 token/个（偏保守，避免 context overflow）
+    - 英语单词：0.75 token/个（GPT 系列经验均值）
+    - 其他字符：0.5 token/个
     """
     if not text:
         return 0
@@ -48,12 +48,11 @@ def count_tokens(text: str) -> int:
         except Exception:
             logger.debug("tiktoken encode failed, using estimation fallback")
 
-    # 估算规则
+    # 估算规则（保守偏大，确保不超出 context window）
     chinese = len(_CHINESE_RE.findall(text))
-    english = len(_ENGLISH_RE.findall(text))
-    punctuation = sum(1 for c in text if c in _PUNCTUATION_SET)
-    digits = len(_DIGIT_RE.findall(text))
-    classified = chinese + english + punctuation + digits
-    other = len(text) - classified
+    english_words = _ENGLISH_RE.findall(text)
+    english_count = len(english_words)
+    english_chars = sum(len(w) for w in english_words)
+    remaining_chars = len(text) - chinese - english_chars
 
-    return round(chinese * 1.3 + english * 1.1 + (punctuation + digits + other) * 1.0)
+    return round(chinese * 2.0 + english_count * 0.75 + remaining_chars * 0.5)

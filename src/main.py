@@ -10,7 +10,7 @@ setup_logging()
 
 logger = logging.getLogger(__name__)
 
-from src.core.tui import run_tui
+from src.tui import run_tui
 
 
 def main():
@@ -20,8 +20,8 @@ def main():
     # Ensure required directories exist
     from src.utils.path import ensure_directory
     try:
-        ensure_directory("./data/memory")
-        ensure_directory("./data/logs")
+        ensure_directory("./memory")
+        ensure_directory("./logs")
     except Exception as e:
         logger.warning(f"Failed to create directories: {e}")
 

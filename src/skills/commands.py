@@ -5,10 +5,10 @@ import threading
 from typing import TYPE_CHECKING, Callable
 
 from ..commands.utils import output as _output
-from ..core.config import config
+from ..config import config
 
 if TYPE_CHECKING:
-    from ..core.tui import SimpleTUI
+    from ..tui import SimpleTUI
 
 from .definition import SkillDefinition
 

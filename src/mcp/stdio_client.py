@@ -33,10 +33,12 @@ class StdioMCPClient(BaseMCPClient):
         self.env_override: Dict[str, str] = server_config.get("env", {})
         self.timeout: int = server_config.get("timeout", 30)
         self.auto_restart: bool = server_config.get("auto_restart", True)
+        self._max_restart_attempts: int = server_config.get("max_restart_attempts", 10)
 
         # Runtime state
         self._process: Optional[subprocess.Popen] = None
         self._reader_thread: Optional[threading.Thread] = None
+        self._stderr_thread: Optional[threading.Thread] = None
         self._response_queue: "queue.Queue[Dict[str, Any]]" = queue.Queue()
         self._stdin_lock: threading.Lock = threading.Lock()
         self._next_id: int = 0
@@ -46,6 +48,8 @@ class StdioMCPClient(BaseMCPClient):
         self._restarting: bool = False
         self._shutdown: bool = False
         self._consecutive_json_failures: int = 0
+        self._restart_count: int = 0
+        self._last_restart_time: float = 0.0
 
     # ------------------------------------------------------------------
     # Public API
@@ -66,17 +70,20 @@ class StdioMCPClient(BaseMCPClient):
             self._perform_handshake()
             self._discover_tools()
             self._connected = True
+            # Successful connection resets restart counter
+            self._restart_count = 0
             logger.info(f"MCP stdio client '{self.name}' connected (command: {self.command})")
             return True
         except Exception as e:
             logger.error(f"MCP stdio client '{self.name}' connection failed: {e}")
-            self._cleanup()
+            self._cleanup(signal_reader=False)
             return False
 
     def disconnect(self) -> None:
         """Disconnect from the MCP server gracefully."""
+        logger.info(f"MCP stdio client '{self.name}' disconnecting")
         self._connected = False
-        self._shutdown = True
+        self._shutdown = True  # Permanently disable auto-restart
         self._cleanup()
 
     def is_connected(self) -> bool:
@@ -92,8 +99,24 @@ class StdioMCPClient(BaseMCPClient):
             self._cleanup()
 
             if self.auto_restart and not self._restarting and not self._shutdown:
-                logger.info(f"Auto-restarting MCP server '{self.name}' (rc={rc})")
+                self._restart_count += 1
+                if self._restart_count > self._max_restart_attempts:
+                    logger.error(
+                        f"MCP stdio server '{self.name}' exceeded max restart attempts "
+                        f"({self._max_restart_attempts}), giving up"
+                    )
+                    return False
+
+                # Exponential backoff: 1s, 2s, 4s, 8s, ... capped at 30s
+                backoff = min(2 ** (self._restart_count - 1), 30)
+                logger.info(
+                    f"Auto-restarting MCP server '{self.name}' "
+                    f"(attempt {self._restart_count}/{self._max_restart_attempts}, "
+                    f"backoff={backoff}s, rc={rc})"
+                )
                 self._restarting = True
+                self._last_restart_time = time.monotonic()
+                time.sleep(backoff)
                 try:
                     return self.connect()
                 finally:
@@ -186,7 +209,7 @@ class StdioMCPClient(BaseMCPClient):
             cmd_parts,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
             env=env
@@ -220,6 +243,15 @@ class StdioMCPClient(BaseMCPClient):
         )
         self._reader_thread.start()
 
+        # Start stderr reader to capture server-side diagnostic output
+        if self._process and self._process.stderr:
+            self._stderr_thread = threading.Thread(
+                target=self._stderr_reader_loop,
+                daemon=True,
+                name=f"mcp-stderr-{self.name}"
+            )
+            self._stderr_thread.start()
+
     def _reader_loop(self) -> None:
         """Daemon thread: continuously read and parse JSON-RPC messages from stdout."""
         while not self._shutdown and self._process and self._process.stdout:
@@ -243,12 +275,32 @@ class StdioMCPClient(BaseMCPClient):
                     break
                 logger.warning(f"MCP stdio '{self.name}': malformed JSON received ({self._consecutive_json_failures}/{JSON_PARSE_FAIL_THRESHOLD}), skipping: {line[:100]}")
                 continue
+            except (BrokenPipeError, OSError, ValueError) as e:
+                logger.warning(f"MCP stdio '{self.name}': reader stopped ({type(e).__name__}: {e})")
+                break
+
+    def _stderr_reader_loop(self) -> None:
+        """Daemon thread: read stderr from subprocess and log it."""
+        while not self._shutdown and self._process and self._process.stderr:
+            try:
+                line = self._process.stderr.readline()
+                if not line:
+                    break
+                line = line.rstrip('\n').rstrip('\r')
+                if line:
+                    logger.warning(f"MCP server '{self.name}' stderr: {line}")
             except (BrokenPipeError, OSError, ValueError):
                 break
 
-    def _cleanup(self) -> None:
-        """Clean up subprocess resources."""
-        self._shutdown = True  # Signal reader thread to stop
+    def _cleanup(self, signal_reader: bool = True) -> None:
+        """Clean up subprocess resources.
+
+        Args:
+            signal_reader: If True, set _shutdown to stop reader threads.
+                          False when called from connect() failure to allow auto-restart.
+        """
+        if signal_reader:
+            self._shutdown = True
         proc = self._process
         if proc is None:
             return
@@ -274,12 +326,18 @@ class StdioMCPClient(BaseMCPClient):
             except Exception:
                 pass
 
+        # Wait for reader threads to finish
+        for thread in (self._reader_thread, self._stderr_thread):
+            if thread and thread.is_alive():
+                thread.join(timeout=2)
+
     # ------------------------------------------------------------------
     # MCP protocol: handshake and communication
     # ------------------------------------------------------------------
 
     def _perform_handshake(self) -> None:
         """Perform MCP initialize handshake with the server."""
+        logger.debug(f"MCP stdio '{self.name}': performing handshake")
         request = MCPProtocol.create_initialize_request(
             client_info={"name": "AGImyCLI", "version": "1.0.0"},
             request_id=self._next_request_id()
@@ -318,18 +376,13 @@ class StdioMCPClient(BaseMCPClient):
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                # Drain any stale responses for this request ID
-                stale_count = 0
-                while not self._response_queue.empty():
-                    try:
-                        stale = self._response_queue.get_nowait()
-                        if stale.get("id") == req_id:
-                            break
-                        stale_count += 1
-                    except queue.Empty:
-                        break
-                if stale_count > 0:
-                    logger.debug(f"Drained {stale_count} stale responses for req_id={req_id}")
+                # Do NOT drain the queue — messages may belong to other concurrent requests.
+                # The reader thread will continue populating the queue, and other callers
+                # will consume their own matching responses.
+                logger.warning(
+                    f"MCP request timed out after {timeout}s "
+                    f"(method: {request.get('method')}, req_id={req_id})"
+                )
                 raise TimeoutError(f"MCP request timed out after {timeout}s (method: {request.get('method')})")
 
             try:
@@ -366,8 +419,8 @@ class StdioMCPClient(BaseMCPClient):
             with self._stdin_lock:
                 self._process.stdin.write(payload + "\n")
                 self._process.stdin.flush()
-        except (BrokenPipeError, OSError):
-            pass
+        except (BrokenPipeError, OSError) as e:
+            logger.warning(f"MCP stdio '{self.name}': notification failed ({type(e).__name__}: {e})")
 
     def _next_request_id(self) -> int:
         """Get the next monotonically increasing request ID."""

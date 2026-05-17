@@ -7,7 +7,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from openai import OpenAI
 
-from ..core.config import config
+from ..config import config
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +113,8 @@ class LLMClient:
             fallback_params = {**params, "model": fb["model"]}
             try:
                 return self._call_with_retries(fallback_params, client=self._fallback_client)
-            except Exception:
+            except Exception as fallback_error:
+                logger.error(f"Fallback model {fb['model']} also failed: {fallback_error}")
                 raise primary_error
 
     def _call_with_retries(self, params: dict, client=None):

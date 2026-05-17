@@ -6,7 +6,7 @@ import os
 import threading
 from typing import Any, Dict, List, Optional
 
-from src.utils.path import resolve_path
+from .utils.path import resolve_path
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ class Config:
 
     def _load_config(self) -> None:
         """Load configuration from config.json"""
-        config_path = resolve_path("config/config.json")
+        config_path = resolve_path("config.json")
         try:
             with open(config_path, "r", encoding="utf-8") as f:
                 self._config = json.load(f)
@@ -211,11 +211,6 @@ class Config:
         """压缩后保留的最近消息数"""
         return self._config.get("compact", {}).get("preserve_recent_messages", 10)
 
-    @property
-    def compact_collapse_threshold(self) -> float:
-        """上下文折叠触发使用率阈值（0.0-1.0），低于 auto_threshold"""
-        return self._config.get("compact", {}).get("collapse_threshold", 0.75)
-
     # Tool Result Persistence Configuration
     @property
     def tool_result_persistence_enabled(self) -> bool:
@@ -340,7 +335,7 @@ class Config:
     # Logs Configuration
     @property
     def logs_path(self) -> str:
-        return self._config.get("logs", {}).get("path", "./data/logs/agent.log")
+        return self._config.get("logs", {}).get("path", "./logs/agent.log")
 
     @property
     def logs_level(self) -> str:
@@ -467,7 +462,7 @@ class Config:
     @property
     def skill_dirs(self) -> list:
         """Directories to scan for SKILL.md files (relative to project root)"""
-        return self._config.get("skills", {}).get("dirs", ["src/skills/definitions"])
+        return self._config.get("skills", {}).get("dirs", ["skills"])
 
     def set_model(self, model_name: str) -> None:
         """Set model name in config (thread-safe)"""

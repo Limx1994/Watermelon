@@ -28,7 +28,14 @@ def create_mcp_client(server_config: Dict[str, Any]) -> BaseMCPClient:
     logger.info(f"Creating MCP client: name={server_name} type={server_type}")
     if server_type == "stdio":
         return StdioMCPClient(server_config)
-    elif server_type in ("http", "streamable_http"):
+    elif server_type == "http":
+        return HttpMCPClient(server_config)
+    elif server_type == "streamable_http":
+        logger.warning(
+            f"MCP server '{server_name}': streamable_http type is not fully implemented "
+            f"(SSE support missing), falling back to plain HTTP. "
+            f"Server-initiated messages will not be received."
+        )
         return HttpMCPClient(server_config)
     else:
         raise ValueError(f"Unknown MCP server type: {server_type}")
