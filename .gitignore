@@ -1,9 +1,9 @@
-logs/
-memory/
-mcpdata/
+# logs/
+# memory/
+# mcpdata/
 __pycache__/
 *.pyc
-.env
+# .env
 *.egg-info/
 /dist/
 build/
@@ -11,8 +11,8 @@ build/
 venv/
 *.log
 .DS_Store
-config.json
-config/mcp.json
+# config.json
+# config/mcp.json
 
 # Archives
 *.7z
