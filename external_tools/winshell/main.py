@@ -190,11 +190,8 @@ def execute_background(script_path: Path, timeout_ms: int, cwd: str) -> Tuple[st
     proc = subprocess.Popen(
         ["powershell", "-NoProfile", "-NoLogo", "-File", str(task_script)],
         cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
 
     BACKGROUND_PROCESSES[task_id] = proc

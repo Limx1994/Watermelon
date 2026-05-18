@@ -254,15 +254,17 @@ def grep_search(
         # 格式化输出
         lines_out = []
         for item in page:
+            # Before context first
+            for bc in item.get("before", []):
+                bc_line = item['line'] - len(item['before']) + item['before'].index(bc)
+                ctx_prefix = f"{item['file']}:{bc_line}:" if show_lineno else ""
+                lines_out.append(f"{ctx_prefix} {bc}")
+            # Match line
             prefix = f"{item['file']}:{item['line']}:" if show_lineno else ""
             lines_out.append(f"{prefix} {item['content']}")
-            for bc in item.get("before", []):
-                ctx_prefix = f"{item['file']}:{item['line'] - len(item['before']) + item['before'].index(bc)}:" if show_lineno else ""
-                lines_out.append(f"{ctx_prefix} {bc}")
-            for ac in item.get("after", []):
-                idx = item["before"] if item.get("before") else []
-                actual_line = item["line"] + len(idx) if not item.get("before") else item["line"]
-                ctx_prefix = f"{item['file']}:{actual_line + 1}:" if show_lineno else ""
+            # After context with incrementing line numbers
+            for i, ac in enumerate(item.get("after", [])):
+                ctx_prefix = f"{item['file']}:{item['line'] + 1 + i}:" if show_lineno else ""
                 lines_out.append(f"{ctx_prefix} {ac}")
 
         return "\n".join(lines_out), total

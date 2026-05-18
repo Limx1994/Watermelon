@@ -224,7 +224,7 @@ def read_pdf_file(file_path: Path, pages: Optional[str] = None) -> Dict[str, Any
             for i in range(start_idx, end_idx + 1):
                 page = reader.pages[i]
                 # 提取文本（PyPDF2 不支持直接渲染为图像，回退到文本提取）
-images.append({
+                images.append({
                     'pageNumber': i + 1,
                     'text': page.extract_text()[:1000] if page.extract_text() else ''
                 })

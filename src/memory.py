@@ -175,6 +175,10 @@ class Memory:
         Only returns current session messages, no historical loading.
         """
         messages = self.get_context(max_messages)
+        # Remove leading tool messages to avoid orphaned tool results
+        # (truncation may cut between assistant tool_calls and their tool results)
+        while messages and messages[0].get("role") == "tool":
+            messages = messages[1:]
         result = []
         for m in messages:
             # Filter to only fields the LLM API accepts

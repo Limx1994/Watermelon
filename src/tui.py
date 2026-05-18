@@ -224,6 +224,7 @@ class SimpleTUI:
 
         # Agent safety
         self._agent_running = False
+        self._agent_generation: int = 0
         self._agent_stop_event = threading.Event()
         self._exit_requested = False
         self._poll_task: Optional[asyncio.Task] = None
@@ -784,10 +785,12 @@ class SimpleTUI:
                 self._agent_stop_event.clear()
                 self.agent.submit_work(text, source="user")
                 self._agent_running = True
+                self._agent_generation = self.agent._run_generation
                 logger.debug("Agent running: True (autonomous submit)")
                 self._output_queue.put(("token_info", f" {config.thinking_indicator}... "))
             else:
                 self._agent_running = True
+                self._agent_generation = self.agent._run_generation
                 logger.debug("Agent running: True (new thread)")
                 self._agent_stop_event.clear()
                 self._output_queue.put(("token_info", f" {config.thinking_indicator}... "))
@@ -943,7 +946,7 @@ class SimpleTUI:
         finally:
             elapsed = _time.monotonic() - t0
             logger.info(f"Agent execution finished in {elapsed:.1f}s")
-            self._output_queue.put(("_agent_done", ""))
+            self._output_queue.put(("_agent_done", str(self.agent._run_generation)))
 
     def _execute_slash_command(self, cmd_text: str) -> None:
         """解析并执行斜杠命令。主线程同步执行。"""
@@ -1007,7 +1010,9 @@ class SimpleTUI:
 
                 # Process one message
                 if msg_type == "_agent_done":
-                    agent_done = True
+                    done_gen = int(text) if text.isdigit() else -1
+                    if done_gen == self._agent_generation:
+                        agent_done = True
                     continue
 
                 elif msg_type == "thinking":

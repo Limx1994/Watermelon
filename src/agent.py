@@ -185,6 +185,7 @@ class Agent:
         self._is_sleeping = False
         self._first_tick = True
         self._run_lock = threading.RLock()
+        self._run_generation: int = 0
         self._setup_tools()
         self.total_tokens: int = 0  # 累计token消耗
         # 上下文压缩引擎
@@ -436,6 +437,7 @@ class Agent:
 
     def run(self, user_input: str) -> str:
         """Run the agent with a user input. Returns the final response text."""
+        self._run_generation += 1
         with self._run_lock:
             try:
                 result = self._run_inner(user_input)
@@ -963,4 +965,4 @@ class Agent:
             self._stream_output("\n[自主模式已退出]\n", "compact", force=True)
             logger.info("Autonomous mode deactivated")
             if self.output_callback:
-                self.output_callback("_agent_done", "")
+                self.output_callback("_agent_done", str(self._run_generation))

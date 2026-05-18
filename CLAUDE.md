@@ -28,7 +28,7 @@ src/
 └── utils/               # path.py, token_counter.py, logging.py
 external_tools/          # Compiled .exe tools (read_file, write_file, shell, grep, glob, edit)
 skills/                  # SKILL.md definitions
-prompts/                 # Prompt templates (.md) — system/, service/, recovery/, autonomous/
+prompts/                 # Prompt templates (.md)
 config/                  # mcp.json, tools.json
 config.json              # App configuration
 README_zh.md             # Readme (Chinese)
@@ -81,19 +81,19 @@ All settings in `config.json`:
 | | `types` | `["user","feedback","project","reference"]` | Allowed memory types |
 | `autonomous` | `tick_interval_minutes` | `10` | Proactive wake-up interval |
 | | `cron_tasks` | `[]` | Cron task definitions |
-| `prompts` | `system_intro` | `./prompts/system/intro.md` | System prompt intro section |
-| | `system_rules` | `./prompts/system/system_rules.md` | System behavior rules |
-| | `system_doing_tasks` | `./prompts/system/doing_tasks.md` | Task execution guidelines |
-| | `system_tool_usage` | `./prompts/system/tool_usage.md` | Tool usage rules |
-| | `system_tone_style` | `./prompts/system/tone_style.md` | Tone/style guidelines |
-| | `system_output_efficiency` | `./prompts/system/output_efficiency.md` | Output efficiency rules |
-| | `autonomous_instructions` | `./prompts/autonomous/instructions.md` | Autonomous mode directives |
-| | `compact_resume` | `./prompts/service/compact_resume.md` | Post-compaction resume |
-| | `summary_system` | `./prompts/service/summary_system.md` | Summary system prompt |
-| | `summary_template` | `./prompts/service/summary_template.md` | Summary template |
-| | `max_tokens_recovery` | `./prompts/recovery/max_tokens_recovery.md` | Output truncation recovery |
-| | `context_too_long` | `./prompts/recovery/context_too_long.md` | Context overflow recovery |
-| | `token_budget_nudge` | `./prompts/recovery/token_budget_nudge.md` | Token budget warning |
+| `prompts` | `system_intro` | `./prompts/intro.md` | System prompt intro section |
+| | `system_rules` | `./prompts/system_rules.md` | System behavior rules |
+| | `system_doing_tasks` | `./prompts/doing_tasks.md` | Task execution guidelines |
+| | `system_tool_usage` | `./prompts/tool_usage.md` | Tool usage rules |
+| | `system_tone_style` | `./prompts/tone_style.md` | Tone/style guidelines |
+| | `system_output_efficiency` | `./prompts/output_efficiency.md` | Output efficiency rules |
+| | `autonomous_instructions` | `./prompts/instructions.md` | Autonomous mode directives |
+| | `compact_resume` | `./prompts/compact_resume.md` | Post-compaction resume |
+| | `summary_system` | `./prompts/summary_system.md` | Summary system prompt |
+| | `summary_template` | `./prompts/summary_template.md` | Summary template |
+| | `max_tokens_recovery` | `./prompts/max_tokens_recovery.md` | Output truncation recovery |
+| | `context_too_long` | `./prompts/context_too_long.md` | Context overflow recovery |
+| | `token_budget_nudge` | `./prompts/token_budget_nudge.md` | Token budget warning |
 
 MCP config in `config/mcp.json`: `{"mcpServers": {"name": {"type": "stdio|http", "command": "...", "args": []}}}`
 
@@ -131,6 +131,7 @@ JSON-RPC 2.0: `initialize`, `tools/list`, `tools/call`. Key classes: `MCPManager
 - **Concurrent execution**: Read-only tools parallel (`ThreadPoolExecutor`); write tools serial
 - **Stop hooks**: `register_stop_hook(callback)` — run after tool rounds
 - **Interruptible sleep**: Both `Agent._interruptible_sleep()` and `LLMClient._interruptible_sleep()` check `stop_event` every 0.2s, raising `AgentCancelledError` / `InterruptedError` for fast Ctrl+C cancellation during retries
+- **Generation counter**: `_run_generation` increments on each `run()` call; `_agent_done` messages carry generation ID to prevent stale messages from clearing `_agent_running` in the TUI
 
 ## Memory System
 
@@ -140,12 +141,13 @@ Two independent subsystems sharing `memory/` directory:
 - **Level 1 (Micro)**: Clear old tool results (streak ≥ 3 or gap ≥ 5min)
 - **Level 2 (Auto)**: LLM summary (usage ≥ 85%)
 - **Level 3 (Full)**: Save session & reset (usage ≥ 95%)
+- **Truncation safety**: `get_conversation_for_llm()` strips leading `tool` messages after slicing to prevent orphaned tool results from breaking the LLM API contract
 
 **Persistent Memory** (`PersistentMemory` singleton): Cross-session file-based memory in `memory/*.md` with YAML frontmatter. Dual scope: global (`config.persistent_memory_global_dir`) + project (`memory/`). Four types: `user`, `feedback`, `project`, `reference`. MEMORY.md index auto-generated per scope. Injected into project context at conversation start. LLM-invokable via `memory` tool (save/load/list/search).
 
 ## Slash Commands
 
-`/help`, `/clear`, `/model [name]`, `/config`, `/history`, `/save`/`/load [id]`, `/memory [count]`, `/remember [name]`, `/forget <name>`, `/compact`, `/mcp`, `/tools`, `/system`, `/version`, `/skills`, `/exit`
+`/help`, `/clear`, `/model [name]`, `/config`, `/status`, `/history`, `/save`/`/load [id]`, `/memory [count]`, `/remember [name]`, `/forget <name>`, `/compact`, `/mcp`, `/tools`, `/system`, `/version`, `/skills`, `/exit`
 
 ## Skill System
 
@@ -206,6 +208,7 @@ Shortcuts: `Enter` send, `Ctrl+J` newline, `Up/Down` history, `PageUp/PageDown` 
 16. **Integer token counting**: `count_tokens()` returns `int` (rounded) to avoid floating-point accumulation errors
 17. **Thread-safe MCP**: `ToolIndex` and `MCPManager` use locks for concurrent access safety
 18. **User-friendly errors**: Error messages shown to users never expose Python class names; details go to logs only
+19. **Generation-based done messages**: `_agent_done` carries a generation counter to prevent stale autonomous loop exits from clearing `_agent_running` state in the TUI
 
 ## Running
 
